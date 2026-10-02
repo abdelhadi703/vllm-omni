@@ -147,8 +147,8 @@ def run_e2e():
 
     # Keep the deploy profile's sampling policy, penalties and required stops.
     sampling_params_list = copy.deepcopy(omni.default_sampling_params_list)
-    sampling_params_list[0].min_tokens = max(1, min_len)
-    sampling_params_list[0].max_tokens = min(2048, max_len)
+    sampling_params_list[0].max_tokens = max(1, min(2048, max_len))
+    sampling_params_list[0].min_tokens = min(max(1, min_len), sampling_params_list[0].max_tokens)
 
     profiler_enabled = args.profiler_config is not None
     if profiler_enabled:
