@@ -571,6 +571,46 @@ class TestPipelineDiscovery:
         assert "qwen3_omni_moe_thinker_only" in OMNI_PIPELINES
         assert "qwen3_tts" in OMNI_PIPELINES
 
+    @pytest.mark.parametrize(
+        "cuda,major,memory_gib,optimized",
+        [
+            (False, None, 0, False),
+            (True, None, 141, False),
+            (True, 8, 141, False),
+            (True, 9, 80, False),
+            (True, 10, 180, False),
+            (True, 9, 141, True),
+        ],
+    )
+    def test_cosyvoice3_device_default_and_explicit_overrides(self, monkeypatch, cuda, major, memory_gib, optimized):
+        from vllm.platforms import current_platform
+        from vllm.platforms.interface import DeviceCapability
+
+        monkeypatch.setattr(current_platform, "is_cuda", lambda: cuda)
+        capability = DeviceCapability(major, 0) if major is not None else None
+        monkeypatch.setattr(current_platform, "get_device_capability", lambda: capability)
+        monkeypatch.setattr(current_platform, "get_device_total_memory", lambda: memory_gib * 1024**3)
+        pipeline = resolve_pipeline_config("cosyvoice3")
+        assert pipeline is not None
+        config = VllmOmniConfig.from_pipeline_config(pipeline)
+        talker, codec = config.stage_configs
+        assert talker.scheduler_config.max_num_seqs == codec.scheduler_config.max_num_seqs == (32 if optimized else 8)
+        assert talker.runtime_config.cuda_mps == codec.runtime_config.cuda_mps == optimized
+        assert talker.model_config.hf_overrides == ({"cosyvoice3_sampling_mode": "standard"} if optimized else None)
+        assert pipeline.stages[0].sampling_constraints["stop_token_ids"] == list(range(6561, 6761))
+        if optimized:
+            assert codec.runtime_config.env["COSYVOICE3_CACHED_ISTFT"] == "1"
+            assert codec.runtime_config.env["COSYVOICE3_HIFT_GRAPH"] == "1"
+            override = VllmOmniConfig.from_pipeline_config(
+                pipeline, cli_overrides={"hf_overrides": {"cosyvoice3_sampling_mode": "ras", "seed": 7}}
+            )
+            assert override.stage_by_id(0).model_config.hf_overrides == {"cosyvoice3_sampling_mode": "ras", "seed": 7}
+        explicit = VllmOmniConfig.from_pipeline_config(
+            pipeline, deploy_config_path=get_deploy_config_path("cosyvoice3.yaml")
+        )
+        assert explicit.stage_by_id(0).scheduler_config.max_num_seqs == 8
+        assert explicit.stage_by_id(0).model_config.hf_overrides is None
+
     def test_registry_resolver_qwen3_omni_all_stages(self):
         """Test that providing the HF config for qwen3 omni with audio enabled uses all stages."""
         pipeline = resolve_pipeline_config(
