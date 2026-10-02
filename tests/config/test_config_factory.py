@@ -589,7 +589,10 @@ class TestPipelineDiscovery:
         from vllm.platforms import current_platform
         from vllm.platforms.interface import DeviceCapability
 
+        from vllm_omni.platforms import current_omni_platform
+
         monkeypatch.setattr(current_platform, "is_cuda", lambda: cuda)
+        monkeypatch.setattr(current_omni_platform, "device_name", "cuda" if cuda else "cpu")
         capability = DeviceCapability(major, 0) if major is not None else None
         monkeypatch.setattr(current_platform, "get_device_capability", lambda: capability)
         monkeypatch.setattr(current_platform, "get_device_total_memory", lambda: memory_gib * 1024**3)
