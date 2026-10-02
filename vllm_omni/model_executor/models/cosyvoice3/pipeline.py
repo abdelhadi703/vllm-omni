@@ -12,6 +12,7 @@ Stage 1: Code2Wav — flow-matching decoder → acoustic features → waveform.
     through the shared-memory connector.
 """
 
+import shutil
 from dataclasses import replace
 
 from transformers import PretrainedConfig
@@ -61,7 +62,7 @@ COSYVOICE3_PIPELINE = PipelineConfig(
 
 
 def resolve_cosyvoice3_pipeline(hf_config: PretrainedConfig | None = None) -> PipelineConfig | None:
-    """Use the validated throughput profile on H200-class Hopper devices.
+    """Select a streaming default compatible with the device and runtime.
 
     Query the platform through NVML without initializing CUDA in the parent.
     Explicit deploy configs still take precedence over this pipeline default.
@@ -76,6 +77,7 @@ def resolve_cosyvoice3_pipeline(hf_config: PretrainedConfig | None = None) -> Pi
             capability is not None
             and capability.major == 9
             and current_platform.get_device_total_memory() >= 140 * 1024**3
+            and shutil.which("nvidia-cuda-mps-control") is not None
         ):
             return replace(
                 COSYVOICE3_PIPELINE,

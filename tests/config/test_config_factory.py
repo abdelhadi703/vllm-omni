@@ -572,17 +572,20 @@ class TestPipelineDiscovery:
         assert "qwen3_tts" in OMNI_PIPELINES
 
     @pytest.mark.parametrize(
-        "cuda,major,memory_gib,optimized",
+        "cuda,major,memory_gib,mps,optimized",
         [
-            (False, None, 0, False),
-            (True, None, 141, False),
-            (True, 8, 141, False),
-            (True, 9, 80, False),
-            (True, 10, 180, False),
-            (True, 9, 141, True),
+            (False, None, 0, True, False),
+            (True, None, 141, True, False),
+            (True, 8, 141, True, False),
+            (True, 9, 80, True, False),
+            (True, 10, 180, True, False),
+            (True, 9, 141, False, False),
+            (True, 9, 141, True, True),
         ],
     )
-    def test_cosyvoice3_device_default_and_explicit_overrides(self, monkeypatch, cuda, major, memory_gib, optimized):
+    def test_cosyvoice3_device_default_and_explicit_overrides(
+        self, monkeypatch, cuda, major, memory_gib, mps, optimized
+    ):
         from vllm.platforms import current_platform
         from vllm.platforms.interface import DeviceCapability
 
@@ -590,6 +593,10 @@ class TestPipelineDiscovery:
         capability = DeviceCapability(major, 0) if major is not None else None
         monkeypatch.setattr(current_platform, "get_device_capability", lambda: capability)
         monkeypatch.setattr(current_platform, "get_device_total_memory", lambda: memory_gib * 1024**3)
+        monkeypatch.setattr(
+            "vllm_omni.model_executor.models.cosyvoice3.pipeline.shutil.which",
+            lambda command: "/usr/bin/nvidia-cuda-mps-control" if mps else None,
+        )
         pipeline = resolve_pipeline_config("cosyvoice3")
         assert pipeline is not None
         config = VllmOmniConfig.from_pipeline_config(pipeline)

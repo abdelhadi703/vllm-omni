@@ -1,5 +1,6 @@
 # Single-Hopper streaming throughput profile: AR32 / codec32, Flow10.
-# Automatically selected on Hopper devices with at least 140 GiB (H200).
+# Automatically selected on Hopper devices with at least 140 GiB (H200)
+# when nvidia-cuda-mps-control is available on PATH.
 # Standard sampling is configured below; request stream=true for first audio.
 # F0 and HiFT stay FP32; only deterministic HiFT decode is graphed.
 # HiFT graphs capture on the third use of each exact shape, adding latency then.
