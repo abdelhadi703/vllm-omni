@@ -391,7 +391,7 @@ class OmniGPUModelRunner(GPUModelRunner):
         }
         logger.info("Excluded FULL CUDA graph capture for Omni model. PIECEWISE graphs will still be captured.")
 
-    def capture_model(self) -> int:
+    def capture_model(self, *, profile_only: bool = False) -> int:
         """Handle CUDA graph capture for Omni models.
 
         Tuple-returning models use PIECEWISE graphs; FULL replay requires
@@ -424,12 +424,17 @@ class OmniGPUModelRunner(GPUModelRunner):
             use_aux = self.use_aux_hidden_state_outputs
             self.use_aux_hidden_state_outputs = use_aux or aux_outputs
             try:
-                result = super().capture_model()
+                result = super().capture_model(profile_only=profile_only)
             finally:
                 self.model.forward = original_forward  # type: ignore[assignment]
                 self.use_aux_hidden_state_outputs = use_aux
         else:
-            result = super().capture_model()
+            result = super().capture_model(profile_only=profile_only)
+
+        if profile_only:
+            # Upstream discards captures in its temporary profiling pool.
+            # Model-owned graphs must be recorded during the real capture.
+            return result
 
         capture_mtp = getattr(getattr(self, "model_state", None), "capture_mtp_graphs", None)
         if callable(capture_mtp):
@@ -494,6 +499,7 @@ class OmniGPUModelRunner(GPUModelRunner):
         is_profile: bool = False,
         context_len: int = 0,
         valid_dummy_state_slots: bool = False,
+        randomize_inputs: bool = False,
     ) -> Any:
         if not dummy_run:
             self._prepare_native_data_plane(scheduler_output)
@@ -570,7 +576,10 @@ class OmniGPUModelRunner(GPUModelRunner):
                 batch_desc.num_tokens,
                 self.input_buffers,
                 max_query_len=batch_desc.max_query_len,
+                is_padding=not is_profile,
             )
+            if randomize_inputs:
+                input_batch.input_ids.random_(0, self.vocab_size)
             if not skip_attn_for_dummy_run:
                 block_tables, slot_mappings = self.prepare_dummy_attn(input_batch, valid_dummy_state_slots)
                 if context_len:

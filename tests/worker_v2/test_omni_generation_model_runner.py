@@ -20,6 +20,17 @@ from vllm_omni.worker_v2.omni_generation_model_runner import OmniGenerationModel
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 
+@pytest.mark.parametrize("randomize_inputs", [False, True])
+def test_profile_run_accepts_release_flag_without_running_codec(monkeypatch, randomize_inputs):
+    runner = object.__new__(OmniGenerationModelRunner)
+    runner.model = MagicMock(side_effect=AssertionError("profiling ran codec model"))
+    synchronize = MagicMock()
+    monkeypatch.setattr(torch.accelerator, "synchronize", synchronize)
+    runner.profile_run(randomize_inputs=randomize_inputs)
+    synchronize.assert_called_once_with()
+    runner.model.assert_not_called()
+
+
 class _FakeStagedField:
     def __init__(self, data):
         self.np = data

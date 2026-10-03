@@ -121,6 +121,7 @@ class OmniARModelRunner(OmniGPUModelRunner):
         is_profile: bool = False,
         context_len: int = 0,
         valid_dummy_state_slots: bool = False,
+        randomize_inputs: bool = False,
     ) -> Any:
         if not dummy_run:
             self._handle_kv_transfer_pre(scheduler_output)
@@ -132,6 +133,7 @@ class OmniARModelRunner(OmniGPUModelRunner):
             is_profile=is_profile,
             context_len=context_len,
             valid_dummy_state_slots=valid_dummy_state_slots,
+            randomize_inputs=randomize_inputs,
         )
 
     # ------------------------------------------------------------------

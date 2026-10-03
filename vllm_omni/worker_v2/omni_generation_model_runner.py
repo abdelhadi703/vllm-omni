@@ -292,7 +292,7 @@ class OmniGenerationModelRunner(OmniGPUModelRunner):
     # ------------------------------------------------------------------
 
     @torch.inference_mode()
-    def profile_run(self) -> None:
+    def profile_run(self, randomize_inputs: bool = False) -> None:
         """Generation models have no KV cache — skip profiling.
 
         Code2Wav shares GPU memory with the Talker stage (same device);
@@ -317,6 +317,7 @@ class OmniGenerationModelRunner(OmniGPUModelRunner):
         is_profile: bool = False,
         context_len: int = 0,
         valid_dummy_state_slots: bool = False,
+        randomize_inputs: bool = False,
     ) -> ModelRunnerOutput | IntermediateTensors | None:
         if not dummy_run:
             self._prepare_native_data_plane(scheduler_output)
@@ -388,7 +389,10 @@ class OmniGenerationModelRunner(OmniGPUModelRunner):
                 batch_desc.num_tokens,
                 self.input_buffers,
                 max_query_len=batch_desc.max_query_len,
+                is_padding=not is_profile,
             )
+            # Codec IDs have model-specific bounds; keep valid dummy tokens
+            # even when upstream requests randomized language-model inputs.
 
         attn_metadata = None
         slot_mappings_by_layer = None
