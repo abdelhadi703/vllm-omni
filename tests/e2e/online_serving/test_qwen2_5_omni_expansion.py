@@ -24,9 +24,9 @@ models = ["Qwen/Qwen2.5-Omni-7B"]
 stage_configs = [
     modify_stage_config(
         get_deploy_config_path("ci/qwen2_5_omni.yaml"),
-        # This suite requests two cards. The general CI overlay puts Code2Wav
-        # on a third card; share the Talker's card within the existing budgets.
-        updates={"stages": {2: {"devices": "1"}}},
+        # This suite requests two cards. Share the Talker's card with
+        # Code2Wav and leave room for its whole-sequence DiT workspace.
+        updates={"stages": {1: {"gpu_memory_utilization": 0.3}, 2: {"devices": "1"}}},
     )
 ]
 
