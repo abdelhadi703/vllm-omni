@@ -216,6 +216,7 @@ def test_video_chat_stream_invalid_requests(
 # WS /v1/realtime
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @hardware_test(res={"cuda": "H100", "rocm": "MI325"}, num_cards=2)
 @pytest.mark.parametrize(
     "send_frames_spec, ws_error_code, err_message",
