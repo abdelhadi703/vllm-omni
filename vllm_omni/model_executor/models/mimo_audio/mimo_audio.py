@@ -44,7 +44,7 @@ from vllm.utils.platform_utils import is_pin_memory_available
 from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.sample.sampler import Sampler
 
-from vllm_omni.inputs.mm_processor import OmniMultiModalProcessor
+from vllm_omni.inputs.mm_processor import OmniDummyInputsBuilder, OmniMultiModalProcessor
 from vllm_omni.model_executor.custom_process_mixin import CustomProcessMixin
 from vllm_omni.model_executor.models.mimo_audio.config_mimo_audio import (
     NO_INTERLEAVE_NEXT_TOKEN_ID,
@@ -224,7 +224,7 @@ class MiMoAudioLLMProcessingInfo(
         return {"audio": 1}
 
 
-class MiMoAudioLLMDummyInputsBuilder(BaseDummyInputsBuilder[MiMoAudioLLMProcessingInfo]):
+class MiMoAudioLLMDummyInputsBuilder(OmniDummyInputsBuilder[MiMoAudioLLMProcessingInfo]):
     _processor_inputs_cache: LRUCache = LRUCache(capacity=1024)
 
     def get_dummy_text(self, mm_counts: Mapping[str, int]) -> str:

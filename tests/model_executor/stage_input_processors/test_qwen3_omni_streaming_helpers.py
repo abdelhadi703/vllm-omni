@@ -971,12 +971,19 @@ def test_cosyvoice3_text2flow_full_payload_nested_fallback() -> None:
 
 
 def test_cosyvoice3_full_payload_replace_keys_present() -> None:
-    """Confirm _FULL_PAYLOAD_REPLACE_KEYS lists the three embed.* keys."""
+    """Confirm all prompt-conditioning fields replace accumulated values."""
     from vllm_omni.model_executor.stage_input_processors.cosyvoice3 import (
         _FULL_PAYLOAD_REPLACE_KEYS,
     )
 
-    assert _FULL_PAYLOAD_REPLACE_KEYS == frozenset({"embed.speech_token", "embed.speech_feat", "embed.embedding"})
+    assert _FULL_PAYLOAD_REPLACE_KEYS == frozenset(
+        {
+            "embed.speech_token",
+            "embed.speech_feat",
+            "embed.speech_token_len",
+            "embed.embedding",
+        }
+    )
 
 
 def test_ming_flash_omni_thinker2talker_token_only_smoke() -> None:

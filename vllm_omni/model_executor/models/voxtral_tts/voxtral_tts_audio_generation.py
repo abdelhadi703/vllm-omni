@@ -838,6 +838,14 @@ class VoxtralTTSDummyInputsBuilder(BaseDummyInputsBuilder[VoxtralTTSProcessingIn
 
 
 class VoxtralTTSMultiModalProcessor(BaseMultiModalProcessor[VoxtralTTSProcessingInfo]):
+    def get_dummy_inputs(
+        self,
+        seq_len: int,
+        mm_counts: Mapping[str, int],
+        mm_options: Mapping[str, Any],
+    ) -> ProcessorInputs:
+        return self.dummy_inputs.get_dummy_processor_inputs(seq_len, mm_counts, mm_options)
+
     def _get_mm_fields_config(
         self,
         hf_inputs: Mapping[str, NestedTensors],

@@ -37,7 +37,7 @@ from vllm.multimodal.processing import (
 )
 from vllm.sequence import IntermediateTensors
 
-from vllm_omni.inputs.mm_processor import OmniMultiModalProcessor
+from vllm_omni.inputs.mm_processor import OmniDummyInputsBuilder, OmniMultiModalProcessor
 from vllm_omni.model_executor.models.output_templates import OmniOutput
 from vllm_omni.platforms import current_omni_platform
 from vllm_omni.transformers_utils.configs.omnivoice import OmniVoiceConfig
@@ -241,7 +241,7 @@ class OmniVoiceMultiModalProcessor(OmniMultiModalProcessor[OmniVoiceMultiModalPr
         ]
 
 
-class OmniVoiceDummyInputsBuilder(BaseDummyInputsBuilder[OmniVoiceMultiModalProcessingInfo]):
+class OmniVoiceDummyInputsBuilder(OmniDummyInputsBuilder[OmniVoiceMultiModalProcessingInfo]):
     def get_dummy_text(self, mm_counts: Mapping[str, int]) -> str:
         return "Hello, this is a test of the OmniVoice system."
 
