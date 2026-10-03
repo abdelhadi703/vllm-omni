@@ -305,8 +305,8 @@ _FULL_PAYLOAD_REPLACE_KEYS: frozenset[str] = frozenset(
     }
 )
 
-# vLLM 0.31 keeps the input conditioning snapshot in the request payload and
-# the talker also emits its padded snapshot. Both describe the same prompt;
+# The input conditioning snapshot remains in the request payload and the
+# talker also emits its padded snapshot. Both describe the same prompt;
 # concatenating them creates incompatible shapes before speech_token_len can
 # unpad the emitted value for code2wav.
 for _conditioning_key in _FULL_PAYLOAD_REPLACE_KEYS:

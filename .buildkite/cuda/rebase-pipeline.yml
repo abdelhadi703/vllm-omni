@@ -33,13 +33,3 @@ steps:
       - python3 .buildkite/common/scripts/upload_pipeline.py --upload --all .buildkite/cuda/test-nightly.yml
     agents:
       queue: "cpu_queue_premerge"
-
-  # Include the slow model cases moved from nightly into weekly for release validation.
-  - label: "Upload Weekly Pipeline"
-    depends_on: image-build
-    key: upload-weekly-pipeline
-    if: build.env("WEEKLY") == "1"
-    commands:
-      - python3 .buildkite/common/scripts/upload_pipeline.py --upload --all .buildkite/cuda/test-weekly.yml
-    agents:
-      queue: "cpu_queue_premerge"

@@ -29,7 +29,7 @@ def start_collective_workers(
 def configure_cpu_collective_worker() -> None:
     """Select CPU platforms inside a spawned worker that only uses Gloo.
 
-    Upstream coordinators now resolve local ranks through the selected
+    Upstream coordinators resolve local ranks through the selected
     platform's visible devices. CPU ranks can outnumber visible GPUs, so they
     must use the CPU platform even when the test host has CUDA installed.
     The worker still creates real process groups and runs real collectives.
