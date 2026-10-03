@@ -804,7 +804,7 @@ def test_stream_audio_snapshot_skips_discarded_code_partition(monkeypatch, mocke
     extra = ({"extra": torch.tensor([7])}, _FakeEvent()) if consumer == "extra" else None
     result = _async_output(
         req_ids=["frame", "eos", "prefill"],
-        sampler_output=SamplerOutput(torch.tensor([[1], [2], [3]]), None, None, None),
+        sampler_output=SamplerOutput(torch.tensor([[1], [2], [3]]), None, None, None, None),
         num_sampled_tokens=torch.tensor([1, 1, 1]),
         multimodal_outputs={"codes": {"audio": torch.ones(4, 2)}},
         input_batch=batch,
