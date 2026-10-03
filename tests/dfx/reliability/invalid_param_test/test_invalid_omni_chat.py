@@ -216,7 +216,7 @@ def test_video_chat_stream_invalid_requests(
 # WS /v1/realtime
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Resolved in ``test_realtime_invalid_requests`` (skip ``session.created`` handshake).
+# Resolved in ``test_realtime_invalid_requests`` after the initial handshake.
 _REALTIME_WS_MODEL_MISMATCH = object()
 _REALTIME_WS_INVALID_AUDIO_APPEND = object()
 
@@ -286,7 +286,7 @@ def test_realtime_invalid_requests(
             "send_frames": send_frames,
             "timeout": 120,
             "ws_max_size": None,
-            "ws_skip_types": ["session.created"],
+            "ws_skip_types": ["session.created", "conversation.created"],
             "ws_json_type": "error",
             "ws_error_code": ws_error_code,
             "err_message": err_message,
