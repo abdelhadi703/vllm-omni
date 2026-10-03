@@ -88,7 +88,7 @@ tts_server_params = [
                 get_deploy_config_path("moss_tts_realtime.yaml"),
                 # Leave room on the single L4 for the codec weights, reference
                 # encoder, and speech-serving activations in addition to KV.
-                updates={"stages": {0: {"gpu_memory_utilization": 0.45}}},
+                updates={"stages": {0: {"gpu_memory_utilization": 0.35}}},
             ),
             server_args=["--disable-log-stats"],
         ),
