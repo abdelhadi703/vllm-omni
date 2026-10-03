@@ -1,35 +1,46 @@
+# Focused weekly comparison against unchanged Omni main and official vLLM 0.30.0.
 steps:
-  - label: ":docker: Build image"
-    key: image-build
-    commands:
-      - "bash .buildkite/cuda/scripts/build-ci-image.sh"
-    agents:
-      queue: "cpu_queue_premerge"
-
-  # L2 Test
-  - label: "Upload Ready Pipeline"
-    depends_on: image-build
-    key: upload-ready-pipeline
-    commands:
-      - python3 .buildkite/common/scripts/upload_pipeline.py --upload --all .buildkite/cuda/test-ready.yml
-    agents:
-      queue: "cpu_queue_premerge"
-
-  # L3 Test
-  - label: "Upload Merge Pipeline"
-    depends_on: image-build
-    key: upload-merge-pipeline
-    commands:
-      - python3 .buildkite/common/scripts/upload_pipeline.py --upload --all .buildkite/cuda/test-merge.yml
-    agents:
-      queue: "cpu_queue_premerge"
-
-  # L4 Test
-  - label: "Upload Nightly Pipeline"
-    depends_on: image-build
-    key: upload-nightly-pipeline
-    if: build.env("NIGHTLY") == "1"
-    commands:
-      - python3 .buildkite/common/scripts/upload_pipeline.py --upload --all .buildkite/cuda/test-nightly.yml
-    agents:
-      queue: "cpu_queue_premerge"
+- label: ':docker: Build image'
+  key: image-build
+  commands:
+  - bash .buildkite/cuda/scripts/build-ci-image.sh
+  agents:
+    queue: cpu_queue_premerge
+- label: Upload selected weekly baseline
+  depends_on: image-build
+  key: upload-weekly-pipeline
+  commands:
+  - |
+    python3 - <<'PYBASELINE'
+    import tempfile
+    from pathlib import Path
+    import yaml
+    labels = set(['TTS · Audex · CosyVoice · Qwen3-TTS · L4', 'TTS · H100', 'Diffusion · Bagel · H100 · Single-GPU', 'Diffusion · SenseNova-U1 · H100 · Single-GPU', 'Diffusion · DreamZero · H100 · 2-GPU', 'Diffusion · H100 · 4-GPU', 'Diffusion · MAGI-2 Preview Serving Smoke · H100 · 4-GPU'])
+    source = yaml.safe_load(Path('.buildkite/cuda/test-weekly.yml').read_text())
+    selected = set()
+    guard = 'python3 -c \'import vllm, torch, flashinfer, vllm._C_stable_libtorch; assert vllm.__version__ == \'"\'"\'0.30.0\'"\'"\'; assert torch.cuda.is_available(); print(\'"\'"\'Verified baseline runtime:\'"\'"\', vllm.__version__, torch.__version__)\''
+    def select(steps):
+        kept = []
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            if 'steps' in step:
+                children = select(step['steps'])
+                if children:
+                    kept.append(dict(step, steps=children))
+            elif step.get('label') in labels:
+                item = dict(step)
+                commands = item['commands']
+                item['commands'] = [guard] + ([commands] if isinstance(commands, str) else commands)
+                kept.append(item)
+                selected.add(item['label'])
+        return kept
+    source['steps'] = select(source['steps'])
+    assert selected == labels, (selected, labels)
+    path = Path(tempfile.gettempdir()) / 'vllm-omni-selected-weekly-baseline.yml'
+    path.write_text(yaml.safe_dump(source, sort_keys=False, allow_unicode=True))
+    print('Selected baseline suites:', sorted(selected), flush=True)
+    PYBASELINE
+    python3 .buildkite/common/scripts/upload_pipeline.py --upload --all /tmp/vllm-omni-selected-weekly-baseline.yml
+  agents:
+    queue: cpu_queue_premerge
