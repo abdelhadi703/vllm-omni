@@ -230,6 +230,10 @@ def _run_ring_p2p(
             atol=atol,
             msg=f"[Rank {local_rank}] Ring P2P data mismatch",
         )
+        if device_kind == "cpu":
+            # P2P completion only synchronizes neighbors. Keep fast CPU ranks
+            # alive until every rank has finished constructing and using groups.
+            torch.distributed.barrier()
     finally:
         destroy_distributed_env()
 
