@@ -869,7 +869,6 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
                 # in code2wav warmup. The expert-balance rationale behind
                 # randomize_inputs targets text-MoE models, which generation
                 # stages are not. The kwarg stays accepted for vLLM API compat.
-                self.maybe_randomize_inputs(input_ids, inputs_embeds),
                 set_forward_context(
                     attn_metadata,
                     self.vllm_config,
@@ -949,7 +948,7 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
 
         return hidden_states, None
 
-    def profile_run(self) -> None:
+    def profile_run(self, randomize_inputs: bool = False) -> None:
         # Profile with multimodal encoder & encoder cache.
         if self.supports_mm_inputs:
             mm_config = self.model_config.multimodal_config
@@ -1002,7 +1001,7 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
                             self.encoder_cache[f"tmp_{i}"] = output
 
         # Add `is_profile` here to pre-allocate communication buffers
-        hidden_states, _ = self._dummy_run(self.max_num_tokens, is_profile=True)
+        hidden_states, _ = self._dummy_run(self.max_num_tokens, is_profile=True, randomize_inputs=randomize_inputs)
         output = None
         self._sync_device()
         del hidden_states
