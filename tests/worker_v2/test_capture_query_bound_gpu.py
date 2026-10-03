@@ -45,6 +45,8 @@ def _check_prefill():
     kvconfig = KVCacheConfig(num_blocks=1024, kv_cache_tensors=[], kv_cache_groups=[KVCacheGroupSpec(["attn"], spec)])
     state = OmniModelState.__new__(OmniModelState)
     state.model_config = SimpleNamespace(max_model_len=256)
+    state.vllm_config = c
+    state.max_model_len = 256
     state.supports_mm_inputs = False
     with set_current_vllm_config(c):
         group = AttentionGroup(FlashAttentionBackend, ["attn"], spec, 0)
