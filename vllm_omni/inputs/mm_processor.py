@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from typing import TypeVar
 
 from transformers import BatchFeature
+from vllm.config.multimodal import BaseDummyOptions, MultiModalDummyOptions
 from vllm.multimodal.parse import MultiModalDataItems
 from vllm.multimodal.processing import (
     BaseDummyInputsBuilder,
@@ -26,18 +27,14 @@ class OmniDummyInputsBuilder(BaseDummyInputsBuilder[_I]):
         self,
         seq_len: int,
         mm_counts: Mapping[str, int],
-        mm_options: Mapping[str, object],
+        mm_options: Mapping[str, BaseDummyOptions] | None = None,
     ) -> ProcessorInputs:
         dummy_text = self.get_dummy_text(mm_counts)
-        dummy_mm_data = self.get_dummy_mm_data(seq_len, mm_counts, mm_options)
+        dummy_mm_data = self.get_dummy_mm_data(seq_len, mm_counts, MultiModalDummyOptions(mm_options or {}))
         dummy_mm_items = self.info.parse_mm_data(dummy_mm_data, validate=False)
 
         tokenizer = self.info.ctx.tokenizer
-        dummy_prompt = (
-            []
-            if tokenizer is None
-            else cached_encode(tokenizer, dummy_text, truncation=False)
-        )
+        dummy_prompt = [] if tokenizer is None else cached_encode(tokenizer, dummy_text, truncation=False)
         return ProcessorInputs(prompt=dummy_prompt, mm_data_items=dummy_mm_items)
 
 
@@ -55,12 +52,10 @@ class OmniMultiModalProcessor(BaseMultiModalProcessor[_I]):
         self,
         seq_len: int,
         mm_counts: Mapping[str, int],
-        mm_options: Mapping[str, object],
+        mm_options: MultiModalDummyOptions,
     ) -> ProcessorInputs:
         if isinstance(self.dummy_inputs, OmniDummyInputsBuilder):
-            return self.dummy_inputs.get_dummy_processor_inputs(
-                seq_len, mm_counts, mm_options
-            )
+            return self.dummy_inputs.get_dummy_processor_inputs(seq_len, mm_counts, mm_options)
         return super().get_dummy_inputs(seq_len, mm_counts, mm_options)
 
     def _apply_hf_processor_main(

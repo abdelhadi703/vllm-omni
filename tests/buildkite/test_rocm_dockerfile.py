@@ -11,6 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 AMD_TEMPLATE = REPO_ROOT / ".buildkite/amd/test-template-amd-omni.j2"
 AMD_BUILD_SCRIPT = REPO_ROOT / ".buildkite/amd/scripts/build-ci-image.sh"
 CUDA_RELEASE_DOCKERFILE = REPO_ROOT / "docker/Dockerfile.cuda"
+CUDA_CI_DOCKERFILE = REPO_ROOT / "docker/Dockerfile.ci"
 ROCM_DOCKERFILE = REPO_ROOT / "docker/Dockerfile.rocm"
 ROCM_DOCKERIGNORE = REPO_ROOT / "docker/Dockerfile.rocm.dockerignore"
 
@@ -31,16 +32,15 @@ def _line_index(lines: list[str], prefix: str) -> int:
 
 
 def test_rocm_base_tracks_cuda_vllm_release() -> None:
-    # CUDA CI can target a main-branch nightly independently of the stable
-    # release images used by the CUDA and ROCm distribution Dockerfiles.
     cuda_base = _docker_arg(CUDA_RELEASE_DOCKERFILE, "BASE_IMAGE")
-    _, _, cuda_release = cuda_base.rpartition(":")
+    cuda_image, _, cuda_release = cuda_base.rpartition(":")
     rocm_base = _docker_arg(ROCM_DOCKERFILE, "BASE_IMAGE")
 
     image_ref, separator, image_tag = rocm_base.rpartition(":")
     assert separator, f"expected a tagged ROCm base image, got {rocm_base}"
-    assert image_ref.rsplit("/", 1)[-1] == "vllm-openai-rocm", image_ref
-    assert image_tag == cuda_release
+    assert image_ref == cuda_image
+    assert image_tag == f"{cuda_release}-rocm"
+    assert cuda_release == _docker_arg(CUDA_CI_DOCKERFILE, "VLLM_PRECOMPILED_WHEEL_COMMIT")
 
 
 def test_rocm_defaults_to_prebuilt_base_image() -> None:
@@ -107,11 +107,10 @@ def test_rocm_build_context_excludes_git_history() -> None:
 
 
 def test_rocm_source_ref_tracks_cuda_vllm_release() -> None:
-    cuda_base = _docker_arg(CUDA_RELEASE_DOCKERFILE, "BASE_IMAGE")
-    _, _, cuda_release = cuda_base.rpartition(":")
+    cuda_release = _docker_arg(CUDA_CI_DOCKERFILE, "VLLM_VERSION")
     rocm_source_ref = _docker_arg(ROCM_DOCKERFILE, "VLLM_VERSION_OR_COMMIT_HASH")
 
-    assert rocm_source_ref == cuda_release
+    assert rocm_source_ref == f"v{cuda_release}"
 
 
 def test_rocm_dockerfile_contains_vllm_api_canary() -> None:
