@@ -24,7 +24,7 @@ def _get_diffusion_feature_cases(model: str):
     return [
         pytest.param(
             # The unsharded transformer alone exceeds the L4's 22 GiB.
-            OmniServerParams(model=model, server_args=["--enable-cpu-offload"]),
+            OmniServerParams(model=model, server_args=["--enable-layerwise-offload"]),
             id="base",
             marks=BASE_FEATURE_MARKS,
         ),
