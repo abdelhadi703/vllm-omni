@@ -76,7 +76,8 @@ WORKDIR ${COMMON_WORKDIR}/vllm-omni
 RUN mkdir -p vllm_omni && touch vllm_omni/__init__.py
 COPY pyproject.toml setup.py ./
 COPY requirements/ requirements/
-ENV SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0
+# Scope the override to Omni; dependency source builds need their own versions.
+ENV VLLM_OMNI_VERSION_OVERRIDE=0.0.0
 
 RUN uv pip install --python "$(python3 -c 'import sys; print(sys.executable)')" \
         --no-cache-dir -e ".[dev]" --no-build-isolation && \
