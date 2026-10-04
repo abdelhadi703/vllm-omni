@@ -18,10 +18,6 @@ from vllm_omni.data_entry_keys import (
 from vllm_omni.engine.serialization import deserialize_additional_information
 from vllm_omni.inputs.data import OmniTokensPrompt
 from vllm_omni.model_executor.models.cosyvoice3.utils import unpad_prompt_conditioning
-from vllm_omni.outputs.output_modality import (
-    TensorAccumulationStrategy,
-    register_key_accumulation_strategy,
-)
 
 logger = init_logger(__name__)
 
@@ -292,28 +288,13 @@ def talker2code2wav_async_chunk(
 # keeps the orchestrator off the heavy-tensor path.
 # ============================================================================
 
-# Prompt-conditioning fields are emitted once at prefill and must REPLACE-not-
+# All three embed tensors are emitted once at prefill and must REPLACE-not-
 # CONCAT across the (already trivial) per-request accumulator history so a
 # regression where decode unexpectedly re-emits them does not silently
 # duplicate the prefill tensor.  See mixin._FULL_PAYLOAD_REPLACE_KEYS.
 _FULL_PAYLOAD_REPLACE_KEYS: frozenset[str] = frozenset(
-    {
-        "embed.speech_token",
-        "embed.speech_feat",
-        "embed.speech_token_len",
-        "embed.embedding",
-    }
+    {"embed.speech_token", "embed.speech_feat", "embed.embedding", "embed.speech_token_len"}
 )
-
-# The input conditioning snapshot remains in the request payload and the
-# talker also emits its padded snapshot. Both describe the same prompt;
-# concatenating them creates incompatible shapes before speech_token_len can
-# unpad the emitted value for code2wav.
-for _conditioning_key in _FULL_PAYLOAD_REPLACE_KEYS:
-    register_key_accumulation_strategy(
-        _conditioning_key,
-        TensorAccumulationStrategy.REPLACE,
-    )
 
 
 def text2flow_token_only(
@@ -368,20 +349,20 @@ def text2flow_full_payload(
     """
     del transfer_manager
     rid = getattr(request, "external_req_id", None) or getattr(request, "request_id", "?")
-    if not isinstance(pooling_output, dict):
+    if not isinstance(pooling_output, Mapping):
         logger.warning(
-            "cosyvoice3.text2flow_full_payload: pooling_output not a dict "
+            "cosyvoice3.text2flow_full_payload: pooling_output not a mapping "
             "(type=%s) for req=%s; consumer wait gate may hang.",
             type(pooling_output).__name__,
             rid,
         )
         return None
     embed_out: dict[str, Any] = {}
-    for key in ("speech_token", "speech_feat", "embedding"):
+    for key in ("speech_token", "speech_feat", "embedding", "speech_token_len"):
         v = pooling_output.get(f"embed.{key}")
         if v is None:
             nested = pooling_output.get("embed")
-            if isinstance(nested, dict):
+            if isinstance(nested, Mapping):
                 v = nested.get(key)
         if isinstance(v, torch.Tensor) and v.numel() > 0:
             embed_out[key] = v

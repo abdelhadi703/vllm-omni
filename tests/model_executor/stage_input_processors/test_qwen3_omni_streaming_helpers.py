@@ -971,18 +971,13 @@ def test_cosyvoice3_text2flow_full_payload_nested_fallback() -> None:
 
 
 def test_cosyvoice3_full_payload_replace_keys_present() -> None:
-    """Confirm all prompt-conditioning fields replace accumulated values."""
+    """Reference tensors and their length travel as complete snapshots."""
     from vllm_omni.model_executor.stage_input_processors.cosyvoice3 import (
         _FULL_PAYLOAD_REPLACE_KEYS,
     )
 
     assert _FULL_PAYLOAD_REPLACE_KEYS == frozenset(
-        {
-            "embed.speech_token",
-            "embed.speech_feat",
-            "embed.speech_token_len",
-            "embed.embedding",
-        }
+        {"embed.speech_token", "embed.speech_token_len", "embed.speech_feat", "embed.embedding"}
     )
 
 
