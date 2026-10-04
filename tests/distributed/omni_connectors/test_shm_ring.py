@@ -10,6 +10,7 @@ import uuid
 from dataclasses import asdict
 from multiprocessing import shared_memory
 
+import msgspec
 import pytest
 import torch
 from vllm.outputs import CompletionOutput, RequestOutput
@@ -200,9 +201,32 @@ def test_disabled_ring_and_unsupported_tree_keep_legacy_serializer(edge):
         _, _, metadata = legacy.put("0", "1", "legacy", {"codes": torch.arange(3)})
         assert "shm" in metadata
         assert receiver.get("0", "1", "legacy", metadata)[0]["codes"].tolist() == [0, 1, 2]
-    assert prepare_tensor_frame({"codes": torch.arange(3), "opaque": {1, 2}}) is None
+    assert prepare_tensor_frame({"codes": torch.arange(3), "opaque": object()}) is None
     assert sender.put("0", "1", "falsey", False)[0]
     assert receiver.get("0", "1", "falsey")[0] is False
+
+
+def test_tensor_free_lists_reuse_native_serialization():
+    payload = {"prompt_token_ids": list(range(8192)), "condition": [0.25] * 8192}
+    with SharedMemoryConnector({}) as connector:
+        frame = prepare_tensor_frame(payload)
+        assert isinstance(frame, bytes)
+        assert frame == connector.serialize_obj(payload)
+        assert connector.put("0", "1", "native-lists", payload)[0]
+        assert connector.get("0", "1", "native-lists")[0] == payload
+
+
+def test_scalar_lists_and_literal_extensions_preserve_wire_semantics():
+    literal = msgspec.msgpack.Ext(42, bytes(20))
+    payload = {"condition": [0.25] * 8192, "codes": torch.arange(28), "extension": literal}
+    with SharedMemoryConnector({}) as connector:
+        _, _, metadata = connector.put("0", "1", "mixed-lists", payload)
+        assert "host_ring" in metadata
+        result = connector.get("0", "1", "mixed-lists")[0]
+        assert result["condition"] == payload["condition"]
+        assert torch.equal(result["codes"], payload["codes"])
+        assert result["extension"].code == literal.code
+        assert result["extension"].data == literal.data
 
 
 def _locked_writer(name, ready, release):
