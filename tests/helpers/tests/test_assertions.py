@@ -21,6 +21,36 @@ from tests.helpers.client import OmniResponse
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 
+@pytest.mark.parametrize("result", ["matching", "wrong_content", "missing_keyword"])
+def test_qwen3_omni_documentation_strong_asr_preserves_content_gates(monkeypatch, result):
+    from tests.examples.online_serving import test_qwen3_omni as documentation
+
+    expected = "cherry blossom trees fill the foreground while a tower stands against the blue sky."
+    transcripts = {
+        "matching": expected,
+        "wrong_content": "cherry blossom is unrelated to this recording about baking bread in a kitchen.",
+        "missing_keyword": expected.replace("cherry blossom", "plum flowers"),
+    }
+    monkeypatch.setattr(
+        documentation,
+        "run_cmd",
+        lambda _command: f"Chat completion output from text: {expected}\nAudio saved to retained.wav\n",
+    )
+
+    def transcribe(output_path, model_size="small", language=None):
+        assert output_path == "./retained.wav"
+        return transcripts[result] if model_size == "large-v3" else "f" * 700
+
+    monkeypatch.setattr(documentation, "convert_audio_file_to_text", transcribe)
+    error = {
+        "wrong_content": "The audio content is not same as the text",
+        "missing_keyword": "The output does not contain any of the keywords",
+    }.get(result)
+    expectation = pytest.raises(AssertionError, match=error) if error else nullcontext()
+    with expectation:
+        documentation.test_modality_control_003(SimpleNamespace(model="Qwen/Qwen3-Omni-30B-A3B-Instruct"))
+
+
 def test_short_transcript_repeat_passes_containment_fallback():
     _assert_transcript_matches(
         " How... how are you?",
