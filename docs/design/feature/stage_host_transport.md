@@ -58,6 +58,8 @@ controlled comparisons or deployments with older receivers. Nonzero capacities
 must be between 4 KiB and 64 MiB. All ring endpoints must support this protocol.
 The launcher supplies a common deployment scope; discovery scans only that
 scope's directory. Receive attempts do not wait for another process's file lock.
+Ring endpoints must share a Linux PID namespace. Deployments that share SHM
+across different PID namespaces must use `host_ring_bytes: 0`.
 
 `health()` exposes `host_ring_puts`, `host_ring_gets` and `host_ring_fallbacks`
 alongside the existing counters. Ring setup failure logs once per edge and uses
