@@ -17,7 +17,10 @@ from typing import Any
 from vllm_omni.entrypoints.stage_utils import shm_read_bytes, shm_write_bytes
 
 from ..utils.logging import get_connector_logger
+from ..utils.serialization import OmniSerializer
+from ..utils.tensor_frame import TensorFrame, prepare_tensor_frame
 from .base import OmniConnectorBase
+from .shm_ring import HostRingTransport
 
 logger = get_connector_logger(__name__)
 
@@ -55,7 +58,8 @@ class SharedMemoryConnector(OmniConnectorBase):
     def __init__(self, config: dict[str, Any]):
         self.config = config
         self.stage_id = config.get("stage_id", -1)
-        scope = config.get("extra", {}).get("wakeup_scope")
+        extra = config.get("extra", config)
+        scope = extra.get("wakeup_scope")
         self._wake_directory = (
             f"/dev/shm/omni_shm_wake_{os.getuid()}_{hashlib.sha256(str(scope).encode()).hexdigest()[:24]}"
             if scope is not None
@@ -67,7 +71,13 @@ class SharedMemoryConnector(OmniConnectorBase):
             "puts": 0,
             "gets": 0,
             "bytes_transferred": 0,
+            "host_ring_puts": 0,
+            "host_ring_gets": 0,
+            "host_ring_fallbacks": 0,
         }
+        # One bounded host fast path per edge, allocated only on the first put.
+        # A zero capacity preserves the per-key protocol for controlled comparisons.
+        self._host_ring = HostRingTransport(self._wake_directory, int(extra.get("host_ring_bytes", 4 << 20)))
         # Receiver side: FIFO read end (plus a write end of our own, so the
         # FIFO never reports EOF when no sender has it open) and a counter of
         # drained wakeups. Each receiver owns its path, including across restarts.
@@ -201,7 +211,29 @@ class SharedMemoryConnector(OmniConnectorBase):
     ) -> tuple[bool, int, dict[str, Any] | None]:
         try:
             self.reap_consumed()
-            payload = self.serialize_obj(data)
+            use_ring = self._host_ring.capacity and str(from_stage).isdigit() and str(to_stage).isdigit()
+            frame = (
+                prepare_tensor_frame(data, max_bytes=self._host_ring.capacity // 4 - 16 - len(put_key.encode()))
+                if use_ring
+                else None
+            )
+            payload: TensorFrame | bytes = frame if frame is not None else self.serialize_obj(data)
+            ring_meta = self._host_ring.put(str(from_stage), str(to_stage), put_key, payload)
+            if ring_meta is not None:
+                # A previous put may have used the per-key fallback.
+                with self._pending_keys_lock:
+                    had_segment = put_key in self._pending_keys
+                if had_segment:
+                    self._cleanup_segment(put_key)
+                size = ring_meta["size"]
+                self._wake_receiver(to_stage)
+                self._metrics["puts"] += 1
+                self._metrics["host_ring_puts"] += 1
+                self._metrics["bytes_transferred"] += size
+                return True, size, {"host_ring": ring_meta, "size": size}
+            self._metrics["host_ring_fallbacks"] += 1
+            if isinstance(payload, TensorFrame):
+                payload = self.serialize_obj(data)
             size = len(payload)
 
             lock_file = f"/dev/shm/shm_{put_key}_lockfile.lock"
@@ -214,6 +246,8 @@ class SharedMemoryConnector(OmniConnectorBase):
             metadata = {"shm": meta, "size": size}
             with self._pending_keys_lock:
                 self._pending_keys[put_key] = None
+            # A successful fallback replaces an unclaimed ring version, too.
+            self._host_ring.cancel(key=put_key)
             self._wake_receiver(to_stage)
 
             self._metrics["puts"] += 1
@@ -286,6 +320,23 @@ class SharedMemoryConnector(OmniConnectorBase):
         get_key: str,
         metadata=None,
     ) -> tuple[Any, int] | None:
+        if isinstance(metadata, dict) and get_key in metadata:
+            metadata = metadata[get_key]
+        ring_meta = metadata.get("host_ring") if isinstance(metadata, dict) else None
+        ring_result = self._host_ring.get(str(from_stage), str(to_stage), get_key, ring_meta)
+        if ring_result is not None:
+            obj, size = ring_result
+            if isinstance(obj, bytes):
+                obj = self.deserialize_obj(obj)
+            else:
+                # Preserve the centralized serializer's output reconstruction,
+                # including RequestOutput/CompletionOutput dictionaries.
+                obj = OmniSerializer.restore(obj)
+            self._metrics["gets"] += 1
+            self._metrics["host_ring_gets"] += 1
+            return obj, size
+        if ring_meta is not None:
+            return None
         if metadata is not None:
             if isinstance(metadata, dict) and get_key in metadata:
                 metadata = metadata.get(get_key)
@@ -312,7 +363,10 @@ class SharedMemoryConnector(OmniConnectorBase):
 
         Returns True when an unconsumed segment was actually unlinked.
         """
-        key = request_id
+        ring_cancelled = self._host_ring.cancel(key=request_id)
+        return self._cleanup_segment(request_id) or bool(ring_cancelled)
+
+    def _cleanup_segment(self, key: str) -> bool:
         unlinked = False
         with self._pending_keys_lock:
             self._pending_keys.pop(key, None)
@@ -343,10 +397,14 @@ class SharedMemoryConnector(OmniConnectorBase):
         """
         with self._pending_keys_lock:
             keys = [k for k in self._pending_keys if k.startswith(key_prefix) and k[len(key_prefix) :].isdigit()]
-        return sum(self.cleanup(key) for key in keys)
+        return sum(self._cleanup_segment(key) for key in keys) + self._host_ring.cancel(prefix=key_prefix)
 
     def close(self) -> None:
         """Unlink all remaining tracked SHM segments."""
+        # A constructor failure may be followed by the base destructor.
+        if not hasattr(self, "_host_ring"):
+            return
+        self._host_ring.close()
         with self._pending_keys_lock:
             keys = list(self._pending_keys)
         for key in keys:
@@ -355,6 +413,7 @@ class SharedMemoryConnector(OmniConnectorBase):
 
     def reap_consumed(self) -> None:
         """Bounded round-robin sweep; receivers unlink SHM in another process."""
+        self._host_ring.reap()
         with self._pending_keys_lock:
             for _ in range(min(64, len(self._pending_keys))):
                 key, _ = self._pending_keys.popitem(last=False)

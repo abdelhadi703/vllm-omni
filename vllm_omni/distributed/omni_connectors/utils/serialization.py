@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 from collections.abc import Mapping
 from dataclasses import asdict, fields, is_dataclass
@@ -349,6 +349,10 @@ class OmniSerde:
     def deserialize(self, data: bytes | bytearray | memoryview) -> Any:
         """Deserialize bytes to an object."""
         return self.decoder.decode(data)
+
+    def restore(self, obj: object) -> object:
+        """Restore wire objects from an already decoded transport tree."""
+        return self.decoder._post_process(obj)
 
 
 # Global instance for simple interface
