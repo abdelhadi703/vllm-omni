@@ -295,9 +295,7 @@ def test_failed_speech_capture_retains_exact_asr_input_and_original_failure(
 
 @pytest.mark.parametrize("capture_enabled", [False, True])
 @pytest.mark.parametrize("content_failure", [False, True])
-def test_speech_capture_is_opt_in_and_does_not_write_successes(
-    monkeypatch, tmp_path, capture_enabled, content_failure
-):
+def test_speech_capture_is_opt_in_and_does_not_write_successes(monkeypatch, tmp_path, capture_enabled, content_failure):
     directory = tmp_path / "failed_audio"
     if capture_enabled:
         monkeypatch.setenv("VLLM_OMNI_FAILED_SPEECH_AUDIO_DIR", str(directory))
