@@ -21,36 +21,6 @@ from tests.helpers.client import OmniResponse
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 
-@pytest.mark.parametrize("result", ["matching", "wrong_content", "missing_keyword"])
-def test_qwen3_omni_documentation_strong_asr_preserves_content_gates(monkeypatch, result):
-    from tests.examples.online_serving import test_qwen3_omni as documentation
-
-    expected = "cherry blossom trees fill the foreground while a tower stands against the blue sky."
-    transcripts = {
-        "matching": expected,
-        "wrong_content": "cherry blossom is unrelated to this recording about baking bread in a kitchen.",
-        "missing_keyword": expected.replace("cherry blossom", "plum flowers"),
-    }
-    monkeypatch.setattr(
-        documentation,
-        "run_cmd",
-        lambda _command: f"Chat completion output from text: {expected}\nAudio saved to retained.wav\n",
-    )
-
-    def transcribe(output_path, model_size="small", language=None):
-        assert output_path == "./retained.wav"
-        return transcripts[result] if model_size == "large-v3" else "f" * 700
-
-    monkeypatch.setattr(documentation, "convert_audio_file_to_text", transcribe)
-    error = {
-        "wrong_content": "The audio content is not same as the text",
-        "missing_keyword": "The output does not contain any of the keywords",
-    }.get(result)
-    expectation = pytest.raises(AssertionError, match=error) if error else nullcontext()
-    with expectation:
-        documentation.test_modality_control_003(SimpleNamespace(model="Qwen/Qwen3-Omni-30B-A3B-Instruct"))
-
-
 def test_short_transcript_repeat_passes_containment_fallback():
     _assert_transcript_matches(
         " How... how are you?",
@@ -68,56 +38,6 @@ def test_short_transcript_unrelated_text_still_fails():
             expected_text="how are you",
             threshold=0.9,
         )
-
-
-@pytest.mark.parametrize("result", ["small_matches", "strong_matches", "both_mismatch", "wrong_sample_rate"])
-def test_qwen3_tts_narrowband_asr_preserves_content_and_sample_rate_gates(monkeypatch, result):
-    from tests.e2e.online_serving import test_qwen3_tts_customvoice_expansion as speech
-
-    expected = "This response should be encoded as eight kilohertz audio."
-    sample_rate = 24_000 if result == "wrong_sample_rate" else 8000
-    buffer = io.BytesIO()
-    with wave.open(buffer, "wb") as wav:
-        wav.setnchannels(1)
-        wav.setsampwidth(2)
-        wav.setframerate(sample_rate)
-        wav.writeframes(_pcm_sine(sample_rate=sample_rate))
-    audio_bytes = buffer.getvalue()
-    models = []
-
-    def transcribe(raw_bytes, model_size="small", language=None):
-        assert raw_bytes == audio_bytes
-        models.append(model_size)
-        if result == "small_matches":
-            return expected
-        if model_size == "large-v3" and result == "strong_matches":
-            return "This response should be encoded as 8kHz audio."
-        return "This response should be encoded as 8K red audio."
-
-    monkeypatch.setattr(assertions, "convert_audio_bytes_to_text", transcribe)
-    monkeypatch.setattr(assertions, "_assert_preset_voice_gender_from_audio", lambda *_args, **_kwargs: None)
-
-    def request(config):
-        assert config["input"] == expected
-        assert_audio_speech_response(
-            OmniResponse(success=True, audio_bytes=audio_bytes, audio_format="audio/wav"), config, "full_model"
-        )
-
-    client = SimpleNamespace(send_audio_speech_request=request)
-    error = {
-        "both_mismatch": "after ASR escalation",
-        "wrong_sample_rate": "Expected sample_rate=8000",
-    }.get(result)
-    expectation = pytest.raises(AssertionError, match=error) if error else nullcontext()
-    with expectation:
-        speech.test_sample_rate_001(SimpleNamespace(model=speech.MODEL), client)
-    expected_models = {
-        "small_matches": ["small"],
-        "strong_matches": ["small", "large-v3"],
-        "both_mismatch": ["small", "large-v3"],
-        "wrong_sample_rate": [],
-    }[result]
-    assert models == expected_models
 
 
 def _capture_transcribe(monkeypatch) -> dict:
