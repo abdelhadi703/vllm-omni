@@ -61,12 +61,14 @@ def test_internal_blacklist_keys_derived_from_orchestrator():
     ],
 )
 @pytest.mark.parametrize("use_v2_model_runner", [False, True])
-def test_aux_outputs_require_the_actual_omni_stage_v2_runner(aux_args, use_v2_model_runner, monkeypatch):
+@pytest.mark.parametrize("is_npu", [False, True])
+def test_aux_outputs_require_a_supported_omni_stage_runner(aux_args, use_v2_model_runner, is_npu, monkeypatch):
     # Upstream runner selection reads this environment variable; Omni workers
     # select their runner from the separate per-stage flag instead.
     monkeypatch.setenv("VLLM_USE_V2_MODEL_RUNNER", "1")
-    if use_v2_model_runner:
-        args = OmniEngineArgs(model="unused", use_v2_model_runner=True, **aux_args)
+    monkeypatch.setattr("vllm_omni.engine.arg_utils.current_omni_platform.is_npu", lambda: is_npu)
+    if use_v2_model_runner or is_npu:
+        args = OmniEngineArgs(model="unused", use_v2_model_runner=use_v2_model_runner, **aux_args)
         assert args.aux_output_config.enabled
     else:
         with pytest.raises(ValueError, match="use_v2_model_runner=True for this Omni stage"):

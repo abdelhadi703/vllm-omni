@@ -38,9 +38,11 @@ def test_rocm_base_tracks_cuda_vllm_release() -> None:
 
     image_ref, separator, image_tag = rocm_base.rpartition(":")
     assert separator, f"expected a tagged ROCm base image, got {rocm_base}"
-    assert image_ref == cuda_image
-    assert image_tag == f"{cuda_release}-rocm"
-    assert cuda_release == _docker_arg(CUDA_CI_DOCKERFILE, "VLLM_PRECOMPILED_WHEEL_COMMIT")
+    assert cuda_image == "vllm/vllm-openai"
+    assert image_ref == "vllm/vllm-openai-rocm"
+    assert image_tag == cuda_release == f"v{_docker_arg(CUDA_CI_DOCKERFILE, 'VLLM_VERSION')}"
+    assert _docker_arg(CUDA_CI_DOCKERFILE, "VLLM_BASE_IMAGE") == cuda_image
+    assert _docker_arg(CUDA_CI_DOCKERFILE, "VLLM_BASE_TAG") == "v${VLLM_VERSION}"
 
 
 def test_rocm_defaults_to_prebuilt_base_image() -> None:

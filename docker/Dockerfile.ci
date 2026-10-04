@@ -1,9 +1,7 @@
 # Use the official release image with its matching CUDA/PyTorch stack.
-# The release images are available in upstream ECR before Docker Hub promotion.
 ARG VLLM_VERSION=0.31.0
-ARG VLLM_PRECOMPILED_WHEEL_COMMIT=db9527a46873454610df6dbedf79a36d6bf1a7f6
-ARG VLLM_BASE_IMAGE=public.ecr.aws/q9t5s3a7/vllm-release-repo
-ARG VLLM_BASE_TAG=${VLLM_PRECOMPILED_WHEEL_COMMIT}
+ARG VLLM_BASE_IMAGE=vllm/vllm-openai
+ARG VLLM_BASE_TAG=v${VLLM_VERSION}
 
 # We use registry-based layer caching for the dependencies,
 # where the tag is determined based on the hash of the contents
