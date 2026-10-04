@@ -148,9 +148,6 @@ def test_sample_rate_001(omni_server, online_client) -> None:
         "stream": False,
         "response_format": "wav",
         "sample_rate": 8000,
-        # Whisper-small can mishear the narrowband "kilohertz" pronunciation.
-        # Recheck the same WAV with stronger ASR, preserving the 0.9 gate.
-        "transcript_escalation_model": "large-v3",
         "task_type": "CustomVoice",
         "voice": "vivian",
     }
