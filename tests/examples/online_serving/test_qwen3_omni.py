@@ -181,7 +181,9 @@ def test_modality_control_003(omni_server) -> None:
 
     # Verify text output same as audio output
     wav_path = extract_last_audio_saved_path(result)
-    audio_content = convert_audio_file_to_text(output_path=f"./{wav_path}")
+    # Whisper-small hallucinates a repeated-letter tail on this fixture's WAV.
+    # Use stronger ASR while retaining the keyword and similarity assertions.
+    audio_content = convert_audio_file_to_text(output_path=f"./{wav_path}", model_size="large-v3")
     print(f"text content is: {text_content}")
     assert "cherry blossom" in audio_content, "The output does not contain any of the keywords."
     print(f"audio content is: {audio_content}")
