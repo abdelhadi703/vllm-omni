@@ -126,7 +126,8 @@ def test_partial_prefill_accumulates_rows_and_no_forward_step_tears_down(runner)
     pending = runner._prepare_omni_aux_output()
     assert runner._finish_omni_aux_output(pending, step, torch.tensor([[5]]), [0]) == {}
 
-    step = _step(runner, hashes={"r": PackedBlockHashes(b"h0", 2)})
+    # Both completed four-token blocks need their scheduler-provided hashes.
+    step = _step(runner, hashes={"r": PackedBlockHashes(b"h0h1", 2)})
     runner.input_batch.num_computed_tokens_cpu[:] = 4
     suffix = _capture(runner, [[4, 5], [5, 6], [6, 7], [7, 8]])
     pending = runner._prepare_omni_aux_output()
