@@ -1001,7 +1001,9 @@ def _assert_transcript_matches(
     )
 
 
-def _retain_failed_speech_audio(audio_bytes: bytes | None, transcript: str, expected_text: Any, error: AssertionError) -> None:
+def _retain_failed_speech_audio(
+    audio_bytes: bytes | None, transcript: str, expected_text: Any, error: AssertionError
+) -> None:
     """Retain the exact ASR input when a CI speech-content assertion fails."""
     directory = os.environ.get("VLLM_OMNI_FAILED_SPEECH_AUDIO_DIR")
     if not directory or not audio_bytes:
