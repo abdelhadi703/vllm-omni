@@ -9,6 +9,7 @@ import time
 import uuid
 from dataclasses import asdict
 from multiprocessing import shared_memory
+from pathlib import Path
 
 import msgspec
 import numpy as np
@@ -444,6 +445,21 @@ def test_ring_setup_failure_keeps_connector_usable(edge, monkeypatch):
     ok, _, metadata = sender.put("0", "1", "no-ring-space", torch.arange(3))
     assert ok and "shm" in metadata
     assert receiver.get("0", "1", "no-ring-space")[0].tolist() == [0, 1, 2]
+
+
+def test_discovery_stamp_failure_keeps_fallback_and_cleanup_usable(edge, monkeypatch):
+    sender, receiver = edge
+
+    def stamp_denied(*args, **kwargs):
+        raise PermissionError("directory timestamp update denied")
+
+    monkeypatch.setattr(os, "utime", stamp_denied)
+    ok, _, metadata = sender.put("0", "1", "no-ring-stamp", torch.arange(3))
+    assert ok and "shm" in metadata
+    assert not sender._host_ring.producers
+    assert not list(Path(f"/dev/shm/{sender._host_ring.directory}").iterdir())
+    assert receiver.get("0", "1", "no-ring-stamp")[0].tolist() == [0, 1, 2]
+    sender.close()
 
 
 def test_close_is_idempotent_and_removes_owned_ring(edge):

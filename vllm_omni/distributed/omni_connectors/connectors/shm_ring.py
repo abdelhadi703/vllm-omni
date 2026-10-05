@@ -233,6 +233,10 @@ class _Channel:
                     os.unlink(os.path.basename(self.registry), dir_fd=directory_fd)
             except FileNotFoundError:
                 pass
+            except OSError as error:
+                # The allocation is already retired. A failed discovery stamp
+                # must not mask setup failure or prevent the per-key fallback.
+                logger.debug("Failed to retire host ring marker %s: %s", self.registry, error)
 
 
 class HostRingTransport:
@@ -423,6 +427,8 @@ class HostRingTransport:
                             os.unlink(name, dir_fd=directory_fd)
                     except FileNotFoundError:
                         pass
+                    except OSError as error:
+                        logger.debug("Failed to prune host ring marker %s: %s", path, error)
                     continue
                 except (BlockingIOError, ValueError):
                     # Attachment may race a writer holding the frame lock.
