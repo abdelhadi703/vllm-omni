@@ -18,6 +18,7 @@ import os
 import select
 import struct
 import threading
+import time
 import uuid
 from collections import deque
 from collections.abc import Iterator
@@ -48,6 +49,25 @@ def _align(size: int) -> int:
 def _process_start(pid: int) -> int:
     with open(f"/proc/{pid}/stat") as file:
         return int(file.read().rsplit(")", 1)[1].split()[19])
+
+
+@contextmanager
+def _registry_update(directory: str) -> Iterator[int]:
+    """Publish a strictly changing discovery stamp at channel birth/retirement.
+
+    Kernel directory mtimes can coincide within a clock tick. Serialize marker
+    updates and preserve the previous stamp before the filesystem changes it.
+    Receivers can then cache discovery without a timer or a per-message scan.
+    """
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        previous = os.fstat(fd).st_mtime_ns
+        yield fd
+        stamp = max(previous + 1, time.time_ns())
+        os.utime(fd, ns=(stamp, stamp))
+    finally:
+        os.close(fd)
 
 
 @dataclass
@@ -209,7 +229,8 @@ class _Channel:
                 pass
         if self.registry is not None:
             try:
-                os.unlink(self.registry)
+                with _registry_update(os.path.dirname(self.registry)) as directory_fd:
+                    os.unlink(os.path.basename(self.registry), dir_fd=directory_fd)
             except FileNotFoundError:
                 pass
 
@@ -227,6 +248,7 @@ class HostRingTransport:
         self.producers: dict[tuple[str, str], _Channel] = {}
         self._disabled_edges: set[tuple[str, str]] = set()
         self.readers: dict[str, _Channel] = {}
+        self._discovery_versions: dict[tuple[str, str], tuple[int, int, int]] = {}
         self._lock = threading.RLock()
         self._closed = False
 
@@ -254,8 +276,9 @@ class HostRingTransport:
                     channel.registry = f"/dev/shm/{self.directory}/{name}"
                     # Discovery is confined to this deployment directory. The
                     # marker appears only after the allocation is ready.
-                    marker = os.open(channel.registry, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-                    os.close(marker)
+                    with _registry_update(os.path.dirname(channel.registry)) as directory_fd:
+                        marker = os.open(name, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600, dir_fd=directory_fd)
+                        os.close(marker)
                 except OSError as error:
                     if channel is not None:
                         channel.close()
@@ -318,6 +341,12 @@ class HostRingTransport:
         if not channel.producer_alive():
             self.readers.pop(channel.name, None)
             channel.close()
+            self._discovery_versions.clear()
+            return None
+        # This optimistic check only rejects a miss; successful reads still
+        # take the shared lock. An unchanged publication cursor cannot have
+        # introduced a new key since this receiver's last locked scan.
+        if key not in channel.index and struct.unpack_from("<Q", channel.mapping, 16)[0] == channel.cursor:
             return None
         try:
             fcntl.flock(channel.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -364,9 +393,22 @@ class HostRingTransport:
                     result = self._receive(channel, key, None)
                     if result is not None:
                         return result
+            directory = f"/dev/shm/{self.directory}"
+            try:
+                status = os.stat(directory)
+            except FileNotFoundError:
+                self._discovery_versions.clear()
+                self._reap_readers()
+                return None
+            version = (status.st_dev, status.st_ino, status.st_mtime_ns)
+            edge = (source, destination)
+            if version == self._discovery_versions.get(edge):
+                return None
             self._reap_readers()
-            # Re-discover only on a miss, retaining first-message delivery and
-            # support for newly started producer processes without a poll timer.
+            # A new producer advances the stamp before publishing any frames,
+            # retaining first-message discovery without scanning every miss.
+            discovered_result = None
+            discovery_complete = True
             for path in glob.iglob(f"/dev/shm/{self.directory}/{edge_prefix}*"):
                 name = os.path.basename(path)
                 if name in self.readers:
@@ -377,16 +419,25 @@ class HostRingTransport:
                     # A published marker whose allocation or producer is gone
                     # cannot become valid again: allocation names are unique.
                     try:
-                        os.unlink(path)
+                        with _registry_update(directory) as directory_fd:
+                            os.unlink(name, dir_fd=directory_fd)
                     except FileNotFoundError:
                         pass
                     continue
                 except (BlockingIOError, ValueError):
+                    # Attachment may race a writer holding the frame lock.
+                    # Retry discovery after it releases, even at this stamp.
+                    discovery_complete = False
                     continue
-                result = self._receive(channel, key, None)
-                if result is not None:
-                    return result
-            return None
+                if discovered_result is None:
+                    discovered_result = self._receive(channel, key, None)
+            # Attach every producer before caching this edge's stamp. Returning
+            # as soon as one frame is found would hide its unvisited peers.
+            if discovery_complete:
+                self._discovery_versions[edge] = version
+            else:
+                self._discovery_versions.pop(edge, None)
+            return discovered_result
 
     def cancel(self, key: str | None = None, prefix: str | None = None) -> int:
         with self._lock:
@@ -424,6 +475,7 @@ class HostRingTransport:
                 channel.close()
             self.producers.clear()
             self.readers.clear()
+            self._discovery_versions.clear()
             try:
                 os.rmdir(f"/dev/shm/{self.directory}")
             except (FileNotFoundError, OSError):

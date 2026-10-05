@@ -58,6 +58,9 @@ controlled comparisons or deployments with older receivers. Nonzero capacities
 must be between 4 KiB and 64 MiB. All ring endpoints must support this protocol.
 The launcher supplies a common deployment scope; discovery scans only that
 scope's directory. Receive attempts do not wait for another process's file lock.
+An unchanged empty channel skips its frame lock. Channel registration and
+retirement advance a serialized discovery stamp, so empty polling does not
+rescan the directory and new producers remain discoverable without a timer.
 Ring endpoints must share a Linux PID namespace. Deployments that share SHM
 across different PID namespaces must use `host_ring_bytes: 0`.
 

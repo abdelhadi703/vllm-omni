@@ -263,6 +263,75 @@ def test_flat_scope_and_metadata_work_across_different_parents(monkeypatch):
         receiver.close()
 
 
+def test_empty_poll_reuses_discovery_and_never_waits_for_a_ring_lock(edge, monkeypatch):
+    sender, receiver = edge
+    sender.put("0", "1", "prime-poll", torch.arange(3))
+    assert receiver.get("0", "1", "prime-poll") is not None
+
+    def unexpected_work(*args, **kwargs):
+        pytest.fail("an empty, unchanged channel must not rescan discovery or acquire its frame lock")
+
+    monkeypatch.setattr("vllm_omni.distributed.omni_connectors.connectors.shm_ring.glob.iglob", unexpected_work)
+    monkeypatch.setattr(fcntl, "flock", unexpected_work)
+    for index in range(128):
+        assert receiver.get("0", "1", f"missing-poll-{index}") is None
+    monkeypatch.undo()
+    sender.put("0", "1", "new-poll", torch.arange(5))
+    assert receiver.get("0", "1", "new-poll")[0].tolist() == list(range(5))
+
+
+def test_new_producer_is_discovered_after_a_miss_even_when_the_clock_does_not_advance(edge, monkeypatch):
+    sender, receiver = edge
+    sender.put("0", "1", "first-producer", torch.arange(3))
+    assert receiver.get("0", "1", "first-producer") is not None
+    assert receiver.get("0", "1", "second-producer") is None
+    old_version = receiver._host_ring._discovery_versions["0", "1"]
+    monkeypatch.setattr("vllm_omni.distributed.omni_connectors.connectors.shm_ring.time.time_ns", lambda: 0)
+    with SharedMemoryConnector(sender.config) as second:
+        second.put("0", "1", "second-producer", torch.arange(5))
+        assert receiver.get("0", "1", "second-producer")[0].tolist() == list(range(5))
+        new_version = receiver._host_ring._discovery_versions["0", "1"]
+        assert new_version[2] == old_version[2] + 1
+
+
+def test_one_receiver_discovers_each_input_edge_at_the_same_registry_version(edge):
+    sender, receiver = edge
+    with SharedMemoryConnector({**sender.config, "stage_id": 2}) as second:
+        sender.put("0", "1", "fanin-first", torch.arange(3))
+        second.put("2", "1", "fanin-second", torch.arange(5))
+        assert receiver.get("0", "1", "fanin-first")[0].tolist() == list(range(3))
+        assert receiver.get("2", "1", "fanin-second")[0].tolist() == list(range(5))
+
+
+def test_discovery_attaches_all_producers_even_when_the_first_one_has_the_requested_key(edge, monkeypatch):
+    sender, receiver = edge
+    with SharedMemoryConnector(sender.config) as second:
+        first_metadata = sender.put("0", "1", "multi-first", torch.arange(3))[2]
+        second_metadata = second.put("0", "1", "multi-second", torch.arange(5))[2]
+        paths = [
+            f"/dev/shm/{receiver._host_ring.directory}/{metadata['host_ring']['name']}"
+            for metadata in (first_metadata, second_metadata)
+        ]
+        monkeypatch.setattr(
+            "vllm_omni.distributed.omni_connectors.connectors.shm_ring.glob.iglob", lambda _: iter(paths)
+        )
+        assert receiver.get("0", "1", "multi-first")[0].tolist() == list(range(3))
+        assert receiver.get("0", "1", "multi-second")[0].tolist() == list(range(5))
+
+
+def test_closed_channel_releases_reader_cache_while_the_producer_process_is_still_alive(edge):
+    sender, receiver = edge
+    sender.put("0", "1", "close-cache", torch.arange(3))
+    assert receiver.get("0", "1", "close-cache") is not None
+    channel = next(iter(receiver._host_ring.readers.values()))
+    fd = channel.fd
+    sender.close()
+    assert receiver.get("0", "1", "not-published-after-close") is None
+    assert not receiver._host_ring.readers
+    with pytest.raises(OSError):
+        os.fstat(fd)
+
+
 def test_disabled_ring_and_unsupported_tree_keep_legacy_serializer(edge):
     sender, receiver = edge
     with SharedMemoryConnector({"host_ring_bytes": 0}) as legacy:
@@ -307,7 +376,8 @@ def _locked_writer(name, ready, release):
         os.close(fd)
 
 
-def test_deadline_receive_never_waits_for_another_process_ring_lock(edge):
+@pytest.mark.parametrize("use_metadata", [False, True])
+def test_deadline_receive_never_waits_for_another_process_ring_lock(edge, use_metadata):
     sender, receiver = edge
     _, _, metadata = sender.put("0", "1", "locked", torch.arange(3))
     ctx = multiprocessing.get_context("spawn")
@@ -317,7 +387,10 @@ def test_deadline_receive_never_waits_for_another_process_ring_lock(edge):
     try:
         assert ready.wait(15)
         start = time.monotonic()
-        assert receiver.get_with_deadline("0", "1", "locked", metadata, deadline=start + 1) is None
+        assert (
+            receiver.get_with_deadline("0", "1", "locked", metadata if use_metadata else None, deadline=start + 1)
+            is None
+        )
         assert time.monotonic() - start < 1
     finally:
         release.set()
@@ -326,7 +399,7 @@ def test_deadline_receive_never_waits_for_another_process_ring_lock(edge):
             writer.kill()
             writer.join()
     assert writer.exitcode == 0
-    assert receiver.get("0", "1", "locked", metadata)[0].tolist() == [0, 1, 2]
+    assert receiver.get("0", "1", "locked", metadata if use_metadata else None)[0].tolist() == [0, 1, 2]
 
 
 def _competing_reader(scope, barrier, results):
