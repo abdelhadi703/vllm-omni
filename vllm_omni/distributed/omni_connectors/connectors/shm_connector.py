@@ -272,7 +272,7 @@ class SharedMemoryConnector(OmniConnectorBase):
             obj = self.deserialize_obj(data_bytes)
             result = (obj, int(shm_handle.get("size", 0)))
             return result
-        except BlockingIOError:
+        except (BlockingIOError, FileNotFoundError):
             return None
         except Exception as e:
             logger.error(f"SharedMemoryConnector shm get failed for req : {e}")
@@ -286,13 +286,15 @@ class SharedMemoryConnector(OmniConnectorBase):
 
     def _get_by_key(self, get_key: str) -> tuple[Any, int] | None:
         """Read a SHM segment addressed purely by *get_key*."""
-        shm = None
         try:
-            shm = shm_pkg.SharedMemory(name=get_key)
-            if shm is None or shm.size == 0:
+            # Inspect size without registering a reader before it owns the
+            # delivery lock. Competing readers must not re-register an already
+            # consumed allocation with the application's resource tracker.
+            size = os.stat(f"/dev/shm/{get_key}").st_size
+            if size == 0:
                 return None
             lock_file = f"/dev/shm/shm_{get_key}_lockfile.lock"
-            shm_handle = {"name": get_key, "size": shm.size}
+            shm_handle = {"name": get_key, "size": size}
             result = self._get_data_with_lock(lock_file, shm_handle)
             if result is not None:
                 with self._pending_keys_lock:
@@ -300,20 +302,9 @@ class SharedMemoryConnector(OmniConnectorBase):
             return result
         except FileNotFoundError:
             return None
-        except ValueError as e:
-            # A receiver can observe a newly-created POSIX SHM object before
-            # the writer has finished sizing it. Treat that as "not ready yet"
-            # so async polling can retry without a traceback.
-            if "empty file" in str(e):
-                return None
-            logger.debug("_get_by_key: unexpected error reading SHM segment %s", get_key, exc_info=True)
-            return None
         except Exception:
             logger.debug("_get_by_key: unexpected error reading SHM segment %s", get_key, exc_info=True)
             return None
-        finally:
-            if shm:
-                shm.close()
 
     def get(
         self,

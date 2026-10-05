@@ -153,6 +153,28 @@ def test_native_scalar_restore_preserves_nested_markers_and_input_containers():
     assert isinstance(decoded["mixed"][2][0], dict)
 
 
+def test_fallback_miss_does_not_register_an_unclaimed_allocation(edge, monkeypatch, caplog):
+    sender, receiver = edge
+    key = "fallback-claim-" + uuid.uuid4().hex
+    _, _, metadata = sender.put("0", "1", key, torch.arange(4096))
+    assert "shm" in metadata
+    original = shared_memory.SharedMemory
+    calls = []
+
+    def tracked_open(*args, **kwargs):
+        calls.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(shared_memory, "SharedMemory", tracked_open)
+    with open(f"/dev/shm/shm_{key}_lockfile.lock", "rb+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        assert receiver.get("0", "1", key) is None
+        assert not calls
+    assert torch.equal(receiver.get("0", "1", key)[0], torch.arange(4096))
+    assert receiver.get("0", "1", key, metadata) is None
+    assert not any(record.levelname == "ERROR" for record in caplog.records)
+
+
 def test_tensor_frames_preserve_shared_output_reconstruction(edge):
     sender, receiver = edge
     completion = asdict(CompletionOutput(index=0, text="", token_ids=[1], cumulative_logprob=0.0, logprobs=None))
