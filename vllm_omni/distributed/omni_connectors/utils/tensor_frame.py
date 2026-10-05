@@ -17,7 +17,11 @@ import uuid
 from dataclasses import dataclass
 
 import msgspec
+import numpy as np
 import torch
+from PIL import Image
+
+from .serialization import OmniSerializer
 
 _LENGTH = struct.Struct("<I")
 _ENCODER = msgspec.msgpack.Encoder()
@@ -65,12 +69,20 @@ def prepare_tensor_frame(payload: object, *, max_bytes: int | None = None) -> Te
     offsets: list[int] = []
     descriptors: list[tuple[str, tuple[int, ...], int]] = []
     data_size = 0
-    nonce = uuid.uuid4().bytes
+    nonce: bytes | None = None
 
-    def encode_tensor(value: object) -> msgspec.msgpack.Ext:
-        nonlocal data_size
+    def encode_tensor(value: object) -> object:
+        nonlocal data_size, nonce
         if type(value) is not torch.Tensor:
-            raise _UnsupportedTreeError
+            # Reuse the common wire representations for mixed model payloads.
+            # Large arrays/images keep the ordinary path without first making
+            # an extra byte snapshot just to discover that the frame cannot fit.
+            if max_bytes is not None:
+                if isinstance(value, np.ndarray) and value.nbytes > max_bytes:
+                    raise _UnsupportedTreeError
+                if isinstance(value, Image.Image) and value.width * value.height * len(value.getbands()) > max_bytes:
+                    raise _UnsupportedTreeError
+            return OmniSerializer.encoder._enc_hook(value)
         if value.device.type != "cpu" or value.layout != torch.strided or value.is_quantized:
             raise _UnsupportedTreeError
         offset = _align(data_size)
@@ -81,6 +93,8 @@ def prepare_tensor_frame(payload: object, *, max_bytes: int | None = None) -> Te
         data_size = offset + value.nbytes
         if max_bytes is not None and data_size > max_bytes:
             raise _UnsupportedTreeError
+        if nonce is None:
+            nonce = uuid.uuid4().bytes
         return msgspec.msgpack.Ext(_REFERENCE_CODE, _REFERENCE.pack(nonce, index))
 
     try:

@@ -205,7 +205,7 @@ class OmniMsgpackDecoder:
                 return self._decode_pil_image(obj)
 
             # Process values recursively first
-            processed = {k: self._post_process(v) for k, v in obj.items()}
+            processed = {k: self._post_process(v) if isinstance(v, (dict, list, tuple)) else v for k, v in obj.items()}
 
             # Check if this looks like an OmniRequestOutput (check before RequestOutput
             # since OmniRequestOutput may also have some RequestOutput-like fields)
@@ -223,10 +223,13 @@ class OmniMsgpackDecoder:
             return processed
 
         if isinstance(obj, list):
-            return [self._post_process(item) for item in obj]
+            # Native msgpack already owns scalar values. Only containers can
+            # contain wire markers; avoid a recursive call for every token or
+            # float in long model payloads, while preserving new-list semantics.
+            return [self._post_process(item) if isinstance(item, (dict, list, tuple)) else item for item in obj]
 
         if isinstance(obj, tuple):
-            return tuple(self._post_process(item) for item in obj)
+            return tuple(self._post_process(item) if isinstance(item, (dict, list, tuple)) else item for item in obj)
 
         return obj
 

@@ -210,7 +210,9 @@ class SharedMemoryConnector(OmniConnectorBase):
         data: Any,
     ) -> tuple[bool, int, dict[str, Any] | None]:
         try:
-            self.reap_consumed()
+            # Ring put() reclaims its own edge under the publication lock.
+            # Keep the per-key sweep here without taking every ring lock twice.
+            self._reap_segments()
             use_ring = self._host_ring.capacity and str(from_stage).isdigit() and str(to_stage).isdigit()
             frame = (
                 prepare_tensor_frame(data, max_bytes=self._host_ring.capacity // 4 - 16 - len(put_key.encode()))
@@ -414,6 +416,9 @@ class SharedMemoryConnector(OmniConnectorBase):
     def reap_consumed(self) -> None:
         """Bounded round-robin sweep; receivers unlink SHM in another process."""
         self._host_ring.reap()
+        self._reap_segments()
+
+    def _reap_segments(self) -> None:
         with self._pending_keys_lock:
             for _ in range(min(64, len(self._pending_keys))):
                 key, _ = self._pending_keys.popitem(last=False)

@@ -11,12 +11,15 @@ from dataclasses import asdict
 from multiprocessing import shared_memory
 
 import msgspec
+import numpy as np
 import pytest
 import torch
+from PIL import Image
 from vllm.outputs import CompletionOutput, RequestOutput
 
 from vllm_omni.data_entry_keys import CodesStruct, MetaStruct, OmniPayloadStruct
 from vllm_omni.distributed.omni_connectors.connectors.shm_connector import SharedMemoryConnector
+from vllm_omni.distributed.omni_connectors.utils.serialization import OmniSerializer
 from vllm_omni.distributed.omni_connectors.utils.tensor_frame import prepare_tensor_frame
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
@@ -105,6 +108,49 @@ def test_source_can_be_overwritten_as_soon_as_put_returns(edge):
     sender.put("0", "1", "source-reuse", source)
     source.fill_(-1)
     assert receiver.get("0", "1", "source-reuse")[0].tolist() == list(range(56))
+
+
+@pytest.mark.parametrize("dtype", [np.bool_, np.int32, np.float16, np.float64, np.complex64])
+def test_mixed_numpy_image_and_tensor_keep_shared_wire_semantics(edge, dtype):
+    sender, receiver = edge
+    array = np.arange(24).astype(dtype).reshape(4, 6)[::-1, ::2]
+    image = Image.fromarray(np.arange(18, dtype=np.uint8).reshape(2, 3, 3))
+    payload = {"codes": torch.arange(28), "array": array, "image": image, "slice": slice(1, 7, 2)}
+    _, _, metadata = sender.put("0", "1", "mixed-native", payload)
+    assert "host_ring" in metadata
+    output = receiver.get("0", "1", "mixed-native", metadata)[0]
+    assert np.array_equal(output["array"], array)
+    assert output["array"].dtype == array.dtype
+    assert not output["array"].flags.writeable
+    assert output["image"].mode == image.mode and output["image"].tobytes() == image.tobytes()
+    assert output["slice"] == [1, 7, 2]
+    assert torch.equal(output["codes"], payload["codes"])
+    array.fill(0)
+    image.paste(0, (0, 0, 3, 2))
+    assert np.count_nonzero(output["array"]) and any(output["image"].tobytes())
+
+
+def test_large_array_rejects_unused_framing_snapshot(monkeypatch):
+    def unexpected_snapshot(value):
+        pytest.fail("a too-large array must not be snapshotted while testing ring admission")
+
+    monkeypatch.setattr(OmniSerializer.encoder, "_enc_hook", unexpected_snapshot)
+    assert prepare_tensor_frame({"array": np.zeros(1024)}, max_bytes=1024) is None
+
+
+def test_native_scalar_restore_preserves_nested_markers_and_input_containers():
+    array = np.arange(3)
+    image = Image.fromarray(np.array([[1, 2]], dtype=np.uint8))
+    tensor = torch.arange(2)
+    payload = {"ids": list(range(8192)), "mixed": [1.5, None, (array, {"image": image, "tensor": tensor})]}
+    decoded = msgspec.msgpack.decode(OmniSerializer.serialize(payload))
+    output = OmniSerializer.restore(decoded)
+    assert output is not decoded and output["ids"] is not decoded["ids"]
+    assert output["ids"] == payload["ids"]
+    assert np.array_equal(output["mixed"][2][0], array)
+    assert output["mixed"][2][1]["image"].tobytes() == image.tobytes()
+    assert torch.equal(output["mixed"][2][1]["tensor"], tensor)
+    assert isinstance(decoded["mixed"][2][0], dict)
 
 
 def test_tensor_frames_preserve_shared_output_reconstruction(edge):
