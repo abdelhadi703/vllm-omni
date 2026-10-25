@@ -93,8 +93,13 @@ def nav_generated_block_changed(root: Path) -> bool:
 
 
 def staged_files(root: Path) -> list[str]:
-    """Return the paths staged for commit, relative to the repo root."""
-    out = git("diff", "--cached", "--name-only", "--diff-filter=ACMR", cwd=root)
+    """Return the paths staged for commit, relative to the repo root.
+
+    Deletions are kept: a commit that only removes an example still has to
+    regenerate the pages, and deleting a generated page is a violation like
+    editing one. Both were missed while the filter dropped D.
+    """
+    out = git("diff", "--cached", "--name-only", "--diff-filter=ACMRD", cwd=root)
     return [line for line in out.splitlines() if line]
 
 
@@ -109,6 +114,33 @@ def diverging_generated_files(root: Path) -> tuple[list[str], list[str], list[st
     ]
     deleted = [line for line in git("ls-files", "--deleted", "--", *pathspec, cwd=root).splitlines() if line]
     return modified, new, deleted
+
+
+def stale_generated_pages(root: Path) -> list[str]:
+    """Return generated pages whose example is gone from examples/.
+
+    ``on_startup`` writes the pages it finds but never removes the ones whose
+    source disappeared, so deleting an example left its page behind pointing at
+    nothing. The generator names a page ``<category>/<stem>.md`` after the
+    example directory, so the source is missing when none of the shapes it
+    reads (a directory, or a .md/.py/.sh file of that stem) exists.
+    """
+    stale: list[str] = []
+    doc_root = root / GENERATED_PAGE_PREFIX
+    if not doc_root.is_dir():
+        return stale
+    for page in sorted(doc_root.rglob("*.md")):
+        relative = page.relative_to(doc_root)
+        stem = root / EXAMPLES_PREFIX / relative.parent / relative.stem
+        candidates = (
+            stem,
+            stem.with_suffix(".md"),
+            stem.with_suffix(".py"),
+            stem.with_suffix(".sh"),
+        )
+        if not any(candidate.exists() for candidate in candidates):
+            stale.append(page.relative_to(root).as_posix())
+    return stale
 
 
 @contextmanager
@@ -185,7 +217,8 @@ def main() -> int:
         return 1
 
     modified, new, deleted = diverging_generated_files(root)
-    if not modified and not new and not deleted:
+    orphaned = stale_generated_pages(root)
+    if not modified and not new and not deleted and not orphaned:
         return 0
 
     if modified or new:
@@ -194,8 +227,8 @@ def main() -> int:
             cwd=root,
             check=True,
         )
-    if deleted:
-        subprocess.run(["git", "rm", "-f", "--", *deleted], cwd=root, check=True)
+    if deleted or orphaned:
+        subprocess.run(["git", "rm", "-f", "--", *deleted, *orphaned], cwd=root, check=True)
 
     print("Synced the example pages with examples/:")
     for path in modified:

@@ -9,6 +9,7 @@ block has to stay off limits.
 """
 
 import importlib.util
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -106,3 +107,62 @@ def test_nav_examples_section_extraction():
     assert section[0] == "examples/README.md"
     assert "Offline Inference" in section[1]
     assert sync.nav_examples_section("nav:\n  - Home: index.md\n") is None
+
+
+def _repo_with_generator(tmp_path):
+    """A throwaway repo that also carries the real mkdocs generator.
+
+    ``generate_examples`` derives its root from the location of its own file,
+    so a copy under ``docs/mkdocs/hooks`` works on the temporary repo.
+    """
+    run = _repo(tmp_path)
+    hooks = tmp_path / "docs/mkdocs/hooks"
+    hooks.mkdir(parents=True)
+    shutil.copy(
+        ROOT_DIR / "docs/mkdocs/hooks/generate_examples.py",
+        hooks / "generate_examples.py",
+    )
+    (tmp_path / "examples").mkdir(exist_ok=True)
+    shutil.copy(
+        ROOT_DIR / "examples/model_display_names.yml",
+        tmp_path / "examples/model_display_names.yml",
+    )
+    return run
+
+
+def test_removing_an_example_updates_the_generated_navigation(tmp_path, monkeypatch):
+    """Deleting an example README has to take its page and nav entry with it."""
+    run = _repo_with_generator(tmp_path)
+    example = tmp_path / "examples/offline_inference/text_to_image/README.md"
+    example.parent.mkdir(parents=True)
+    example.write_text("# Text to image", encoding="utf-8")
+    run("add", "-A")
+
+    monkeypatch.chdir(tmp_path)
+    assert sync.main() == 0
+    run("commit", "-q", "-m", "add the example")
+
+    page = tmp_path / "docs/user_guide/examples/offline_inference/text_to_image.md"
+    assert page.exists()
+    assert "text_to_image" in (tmp_path / NAV).read_text(encoding="utf-8")
+
+    run("rm", "-q", "examples/offline_inference/text_to_image/README.md")
+
+    assert sync.main() == 0
+    assert not page.exists()
+    assert "text_to_image" not in (tmp_path / NAV).read_text(encoding="utf-8")
+
+
+def test_removing_a_generated_page_on_its_own_is_rejected(tmp_path, monkeypatch):
+    """A deletion-only commit cannot slip past the generated-page guard."""
+    run = _repo(tmp_path)
+    page = tmp_path / "docs/user_guide/examples/offline_inference/image_to_image.md"
+    page.parent.mkdir(parents=True)
+    page.write_text("# generated", encoding="utf-8")
+    run("add", "-A")
+    run("commit", "-q", "-m", "the page")
+
+    run("rm", "-q", str(page.relative_to(tmp_path)))
+
+    monkeypatch.chdir(tmp_path)
+    assert sync.main() == 1
