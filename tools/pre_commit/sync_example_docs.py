@@ -116,29 +116,44 @@ def diverging_generated_files(root: Path) -> tuple[list[str], list[str], list[st
     return modified, new, deleted
 
 
+def discovered_examples(root: Path) -> set[tuple[str, str]]:
+    """Return the (category, stem) pairs the generator would pick up.
+
+    Mirrors ``generate_examples.on_startup``: the .py/.md/.sh files sitting
+    directly in a category directory, plus every subdirectory holding at least
+    one .md. A subdirectory whose last Markdown file is gone is not discovered
+    any more, even while a script survives next to it, so its page is stale.
+    """
+    found: set[tuple[str, str]] = set()
+    examples_dir = root / EXAMPLES_PREFIX
+    if not examples_dir.is_dir():
+        return found
+    for category in sorted(p for p in examples_dir.iterdir() if p.is_dir()):
+        for pattern in ("*.py", "*.md", "*.sh"):
+            for path in category.glob(pattern):
+                found.add((category.name, path.stem))
+        for path in category.glob("*/*.md"):
+            found.add((category.name, path.parent.name))
+    return found
+
+
 def stale_generated_pages(root: Path) -> list[str]:
-    """Return generated pages whose example is gone from examples/.
+    """Return generated pages the generator itself would no longer write.
 
     ``on_startup`` writes the pages it finds but never removes the ones whose
-    source disappeared, so deleting an example left its page behind pointing at
-    nothing. The generator names a page ``<category>/<stem>.md`` after the
-    example directory, so the source is missing when none of the shapes it
-    reads (a directory, or a .md/.py/.sh file of that stem) exists.
+    source disappeared, so a deleted example left its page behind pointing at
+    nothing. The check goes through the same discovery rules as the generator
+    rather than "does something still exist under examples/": a directory that
+    only kept a script is not an example any more.
     """
     stale: list[str] = []
     doc_root = root / GENERATED_PAGE_PREFIX
     if not doc_root.is_dir():
         return stale
+    discovered = discovered_examples(root)
     for page in sorted(doc_root.rglob("*.md")):
         relative = page.relative_to(doc_root)
-        stem = root / EXAMPLES_PREFIX / relative.parent / relative.stem
-        candidates = (
-            stem,
-            stem.with_suffix(".md"),
-            stem.with_suffix(".py"),
-            stem.with_suffix(".sh"),
-        )
-        if not any(candidate.exists() for candidate in candidates):
+        if (relative.parent.name, relative.stem) not in discovered:
             stale.append(page.relative_to(root).as_posix())
     return stale
 

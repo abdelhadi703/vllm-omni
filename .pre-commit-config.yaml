@@ -167,6 +167,10 @@ repos:
       entry: python tools/pre_commit/sync_example_docs.py
       language: python
       pass_filenames: false
+      # pre-commit drops deleted paths from the staged list, so without this
+      # the hook is skipped for a commit that only removes an example and the
+      # stale page plus its nav entry would ship untouched.
+      always_run: true
       files: (^examples/|^docs/user_guide/examples/|^docs/\.nav\.yml$)
       additional_dependencies: [regex, pyyaml]
 
