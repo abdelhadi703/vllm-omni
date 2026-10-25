@@ -30,6 +30,7 @@ that is already green.
 
 import subprocess
 import sys
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -103,59 +104,73 @@ def staged_files(root: Path) -> list[str]:
     return [line for line in out.splitlines() if line]
 
 
-def diverging_generated_files(root: Path) -> tuple[list[str], list[str], list[str]]:
-    """Return (modified, new, deleted) generated files on disk vs the index."""
-    pathspec = list(GENERATED_PREFIXES)
-    modified = [line for line in git("diff", "--name-only", "--", *pathspec, cwd=root).splitlines() if line]
-    new = [
-        line
-        for line in git("ls-files", "--others", "--exclude-standard", "--", *pathspec, cwd=root).splitlines()
-        if line
-    ]
-    deleted = [line for line in git("ls-files", "--deleted", "--", *pathspec, cwd=root).splitlines() if line]
-    return modified, new, deleted
+def index_paths(root: Path) -> list[str]:
+    """Paths the generator reads that exist in the index rather than on disk."""
+    out = git("ls-files", "-z", "--", EXAMPLES_PREFIX, NAV_FILE, cwd=root)
+    return [path for path in out.split("\0") if path]
 
 
-def discovered_examples(root: Path) -> set[tuple[str, str]]:
-    """Return the (category, stem) pairs the generator would pick up.
+def export_index(root: Path, destination: Path) -> None:
+    """Write the staged snapshot of the generator's inputs into ``destination``.
 
-    Mirrors ``generate_examples.on_startup``: the .py/.md/.sh files sitting
-    directly in a category directory, plus every subdirectory holding at least
-    one .md. A subdirectory whose last Markdown file is gone is not discovered
-    any more, even while a script survives next to it, so its page is stale.
+    Only the index is exported. An untracked README left in the working tree is
+    not part of the commit being made, so the generator must not see it, and a
+    staged deletion is already gone from the index.
     """
-    found: set[tuple[str, str]] = set()
-    examples_dir = root / EXAMPLES_PREFIX
-    if not examples_dir.is_dir():
-        return found
-    for category in sorted(p for p in examples_dir.iterdir() if p.is_dir()):
-        for pattern in ("*.py", "*.md", "*.sh"):
-            for path in category.glob(pattern):
-                found.add((category.name, path.stem))
-        for path in category.glob("*/*.md"):
-            found.add((category.name, path.parent.name))
-    return found
+    destination.mkdir(parents=True, exist_ok=True)
+    paths = index_paths(root)
+    if not paths:
+        return
+    subprocess.run(
+        ["git", "checkout-index", "-z", "--stdin", f"--prefix={destination.as_posix().rstrip('/')}/"],
+        cwd=root,
+        input="\0".join(paths) + "\0",
+        text=True,
+        check=True,
+    )
 
 
-def stale_generated_pages(root: Path) -> list[str]:
-    """Return generated pages the generator itself would no longer write.
+def apply_snapshot(root: Path, snapshot: Path) -> tuple[list[str], list[str]]:
+    """Copy the snapshot's pages back and report (changed, removed).
 
-    ``on_startup`` writes the pages it finds but never removes the ones whose
-    source disappeared, so a deleted example left its page behind pointing at
-    nothing. The check goes through the same discovery rules as the generator
-    rather than "does something still exist under examples/": a directory that
-    only kept a script is not an example any more.
+    Those two lists are the only paths the caller may stage: they come from the
+    index snapshot, so nothing the working tree carries on its own can reach the
+    commit. A page the snapshot did not produce is removed only if git tracks
+    it; a local untracked page is left alone.
     """
-    stale: list[str] = []
-    doc_root = root / GENERATED_PAGE_PREFIX
-    if not doc_root.is_dir():
-        return stale
-    discovered = discovered_examples(root)
-    for page in sorted(doc_root.rglob("*.md")):
-        relative = page.relative_to(doc_root)
-        if (relative.parent.name, relative.stem) not in discovered:
-            stale.append(page.relative_to(root).as_posix())
-    return stale
+    produced_root = snapshot / GENERATED_PAGE_PREFIX
+    target_root = root / GENERATED_PAGE_PREFIX
+    changed: list[str] = []
+    produced: set[str] = set()
+    if produced_root.is_dir():
+        for page in sorted(produced_root.rglob("*.md")):
+            relative = page.relative_to(produced_root).as_posix()
+            produced.add(relative)
+            destination = target_root / relative
+            text = page.read_text(encoding="utf-8")
+            if destination.exists() and destination.read_text(encoding="utf-8") == text:
+                continue
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(text, encoding="utf-8")
+            changed.append(f"{GENERATED_PAGE_PREFIX}{relative}")
+
+    nav_source = snapshot / NAV_FILE
+    if nav_source.exists():
+        nav_text = nav_source.read_text(encoding="utf-8")
+        nav_target = root / NAV_FILE
+        if not nav_target.exists() or nav_target.read_text(encoding="utf-8") != nav_text:
+            nav_target.write_text(nav_text, encoding="utf-8")
+            changed.append(NAV_FILE)
+
+    tracked = {path for path in git("ls-files", "-z", "--", GENERATED_PAGE_PREFIX, cwd=root).split("\0") if path}
+    removed: list[str] = []
+    if target_root.is_dir():
+        for page in sorted(target_root.rglob("*.md")):
+            relative = page.relative_to(target_root).as_posix()
+            path = f"{GENERATED_PAGE_PREFIX}{relative}"
+            if relative not in produced and path in tracked:
+                removed.append(path)
+    return changed, removed
 
 
 @contextmanager
@@ -169,25 +184,38 @@ def generator_importable(root: Path):
         sys.path.pop(0)
 
 
-def regenerate(root: Path) -> None:
-    """Run the same generation mkdocs runs at build time.
+def regenerate(root: Path) -> tuple[list[str], list[str]]:
+    """Regenerate the pages from the index and report what moved.
+
+    The generator reads directories, so running it against the working tree
+    would also pick up an untracked example README and publish it. It runs over
+    an exported index snapshot instead, and only that snapshot's output is
+    written back.
 
     The generator imports ``regex`` and ``yaml``. If either is missing, the
     hook's ``additional_dependencies`` are incomplete — that is a bug in this
     hook's setup, not in the contributor's commit, so say so plainly instead of
     letting a bare ModuleNotFoundError surface.
     """
-    try:
-        with generator_importable(root):
-            import generate_examples
+    with tempfile.TemporaryDirectory(prefix="sync-example-docs-") as temporary:
+        snapshot = Path(temporary)
+        export_index(root, snapshot)
+        try:
+            with generator_importable(root):
+                import generate_examples
 
-            generate_examples.on_startup("build", False)
-    except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            f"the mkdocs generator needs '{exc.name}', which this hook does not "
-            f"install. Add it to additional_dependencies under the "
-            f"'sync-example-docs' entry in .pre-commit-config.yaml."
-        ) from exc
+                generate_examples.ROOT_DIR = snapshot
+                generate_examples.EXAMPLE_DIR = snapshot / EXAMPLES_PREFIX
+                generate_examples.EXAMPLE_DOC_DIR = snapshot / GENERATED_PAGE_PREFIX
+                generate_examples.NAV_FILE = snapshot / NAV_FILE
+                generate_examples.on_startup("build", False)
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                f"the mkdocs generator needs '{exc.name}', which this hook does not "
+                f"install. Add it to additional_dependencies under the "
+                f"'sync-example-docs' entry in .pre-commit-config.yaml."
+            ) from exc
+        return apply_snapshot(root, snapshot)
 
 
 def main() -> int:
@@ -223,7 +251,7 @@ def main() -> int:
         return 0
 
     try:
-        regenerate(root)
+        changed, removed = regenerate(root)
     except Exception as exc:  # noqa: BLE001 - surface any generator failure to the user
         print(
             f"error: generating the example pages failed: {exc}",
@@ -231,27 +259,19 @@ def main() -> int:
         )
         return 1
 
-    modified, new, deleted = diverging_generated_files(root)
-    orphaned = stale_generated_pages(root)
-    if not modified and not new and not deleted and not orphaned:
+    if not changed and not removed:
         return 0
 
-    if modified or new:
-        subprocess.run(
-            ["git", "add", "--", *GENERATED_PREFIXES],
-            cwd=root,
-            check=True,
-        )
-    if deleted or orphaned:
-        subprocess.run(["git", "rm", "-f", "--", *deleted, *orphaned], cwd=root, check=True)
+    if changed:
+        subprocess.run(["git", "add", "--", *changed], cwd=root, check=True)
+    if removed:
+        subprocess.run(["git", "rm", "-f", "--", *removed], cwd=root, check=True)
 
     print("Synced the example pages with examples/:")
-    for path in modified:
-        print(f"  modified: {path}")
-    for path in new:
-        print(f"  new:      {path}")
-    for path in deleted:
-        print(f"  removed:  {path}")
+    for path in changed:
+        print(f"  updated: {path}")
+    for path in removed:
+        print(f"  removed: {path}")
     return 0
 
 

@@ -174,3 +174,31 @@ def test_deleting_a_generated_page_alone_is_rejected_through_the_hook(tmp_path):
 
     assert done.returncode != 0
     assert "generated" in (done.stdout + done.stderr).lower()
+
+
+def test_an_untracked_example_never_reaches_the_index(tmp_path):
+    """Regeneration reads the index, so a local draft cannot ride along."""
+    repo = _repo(tmp_path)
+    readme = repo / EXAMPLE_DIR / "README.md"
+    readme.parent.mkdir(parents=True)
+    readme.write_text("# Text to image", encoding="utf-8")
+    _git(repo, "add", "-A")
+    assert _pre_commit(repo, tmp_path).returncode == 0
+    _git(repo, "commit", "-qm", "add the example")
+    assert (repo / PAGE).exists()
+
+    draft = repo / "examples/local_notes/README.md"
+    draft.parent.mkdir(parents=True)
+    draft.write_text("# Local draft, must stay out of the commit", encoding="utf-8")
+
+    readme.write_text("# Text to image, reworded", encoding="utf-8")
+    _git(repo, "add", f"{EXAMPLE_DIR}/README.md")
+
+    done = _pre_commit(repo, tmp_path)
+
+    assert done.returncode == 0, done.stderr
+    staged = _git(repo, "diff", "--cached", "--name-only").stdout.split()
+    assert PAGE in staged
+    assert not any("local_notes" in path for path in staged)
+    assert "local_notes" not in _nav(repo)
+    assert draft.read_text(encoding="utf-8") == "# Local draft, must stay out of the commit"
