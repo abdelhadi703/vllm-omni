@@ -13,9 +13,13 @@ mkdocs.yml loads.
 
 Behaviour:
 
-* only docs/user_guide/examples/ or docs/.nav.yml staged: the edit is rejected,
-  because those files are machine-written and any manual change is lost on the
+* docs/user_guide/examples/ staged without examples/: the edit is rejected,
+  because those pages are machine-written and any manual change is lost on the
   next generation;
+* docs/.nav.yml staged without examples/: rejected only when the edit reaches
+  the User Guide -> Examples block, the one block the generator owns. A
+  navigation entry for a hand-written page is kept by the generator and is
+  allowed;
 * something under examples/ staged: the pages are regenerated and staged, so the
   commit carries the matching docs;
 * nothing relevant staged: exit quietly.
@@ -30,8 +34,12 @@ from contextlib import contextmanager
 from pathlib import Path
 
 EXAMPLES_PREFIX = "examples/"
-GENERATED_PREFIXES = ("docs/user_guide/examples/", "docs/.nav.yml")
+GENERATED_PAGE_PREFIX = "docs/user_guide/examples/"
+NAV_FILE = "docs/.nav.yml"
+GENERATED_PREFIXES = (GENERATED_PAGE_PREFIX, NAV_FILE)
 GENERATOR_HOOK_DIR = "docs/mkdocs/hooks"
+NAV_ROOT_SECTION = "User Guide"
+NAV_GENERATED_SECTION = "Examples"
 
 
 def git(*args: str, cwd: Path | None = None) -> str:
@@ -49,6 +57,39 @@ def git(*args: str, cwd: Path | None = None) -> str:
 def repo_root() -> Path:
     """Return the working tree root."""
     return Path(git("rev-parse", "--show-toplevel").strip())
+
+
+def nav_examples_section(text: str):
+    """Return the ``User Guide -> Examples`` block of a nav document, or None.
+
+    That block is the only part of docs/.nav.yml the generator rewrites
+    (``generate_examples.update_nav_file``); every other section is preserved.
+    """
+    import yaml
+
+    data = yaml.safe_load(text) or {}
+    for item in data.get("nav") or []:
+        if isinstance(item, dict) and NAV_ROOT_SECTION in item:
+            for sub in item[NAV_ROOT_SECTION] or []:
+                if isinstance(sub, dict) and NAV_GENERATED_SECTION in sub:
+                    return sub[NAV_GENERATED_SECTION]
+    return None
+
+
+def nav_generated_block_changed(root: Path) -> bool:
+    """True when the staged docs/.nav.yml edits the generated Examples block.
+
+    Comparing the block rather than the whole file is what lets a contributor
+    add a hand-written page and its nav entry: the generator preserves the
+    sections it does not own, so an edit elsewhere is legitimate.
+    """
+    try:
+        staged_text = git("show", f":{NAV_FILE}", cwd=root)
+        head_text = git("show", f"HEAD:{NAV_FILE}", cwd=root)
+    except subprocess.CalledProcessError:
+        # New file, or no HEAD yet: nothing generated to compare against.
+        return False
+    return nav_examples_section(staged_text) != nav_examples_section(head_text)
 
 
 def staged_files(root: Path) -> list[str]:
@@ -107,14 +148,22 @@ def main() -> int:
     staged = staged_files(root)
 
     examples_staged = [f for f in staged if f.startswith(EXAMPLES_PREFIX)]
-    generated_staged = [f for f in staged if f.startswith(GENERATED_PREFIXES)]
+    pages_staged = [f for f in staged if f.startswith(GENERATED_PAGE_PREFIX)]
+    nav_staged = NAV_FILE in staged
 
-    if generated_staged and not examples_staged:
+    # The generated pages are always off-limits without an examples/ change.
+    # docs/.nav.yml is only off-limits when the staged edit touches the block
+    # the generator owns; a navigation entry for a hand-written page is fine.
+    blocked = list(pages_staged)
+    if nav_staged and not examples_staged and nav_generated_block_changed(root):
+        blocked.append(NAV_FILE)
+
+    if blocked and not examples_staged:
         print(
             "error: these files are generated, edit the sources in examples/ instead:",
             file=sys.stderr,
         )
-        for path in generated_staged:
+        for path in blocked:
             print(f"  {path}", file=sys.stderr)
         print(
             "\nThe next generation overwrites anything typed here. Change the "
