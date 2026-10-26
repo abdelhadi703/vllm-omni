@@ -202,3 +202,44 @@ def test_an_untracked_example_never_reaches_the_index(tmp_path):
     assert not any("local_notes" in path for path in staged)
     assert "local_notes" not in _nav(repo)
     assert draft.read_text(encoding="utf-8") == "# Local draft, must stay out of the commit"
+
+
+def test_a_page_that_already_matches_on_disk_is_still_staged(tmp_path):
+    """A page left by a docs build must reach the index with its source."""
+    repo = _repo(tmp_path)
+    readme = repo / EXAMPLE_DIR / "README.md"
+    readme.parent.mkdir(parents=True)
+    readme.write_text("# Text to image", encoding="utf-8")
+    _git(repo, "add", "-A")
+    assert _pre_commit(repo, tmp_path).returncode == 0
+    _git(repo, "commit", "-qm", "the first example")
+
+    other = "examples/offline_inference/image_to_image"
+    other_page = "docs/user_guide/examples/offline_inference/image_to_image.md"
+    other_readme = repo / other / "README.md"
+    other_readme.parent.mkdir(parents=True)
+    other_readme.write_text("# Image to image", encoding="utf-8")
+    _git(repo, "add", f"{other}/README.md")
+    assert _pre_commit(repo, tmp_path).returncode == 0
+    assert (repo / other_page).exists()
+    _git(repo, "commit", "-qm", "the second source only", "--no-verify", "--", f"{other}/README.md")
+
+    # Reset the index to HEAD: the page is now untracked while sitting on disk
+    # with exactly the bytes the generator produces — what a docs build leaves.
+    # The navigation goes back to its committed bytes too, or pre-commit would
+    # stash an unstaged nav edit and fail to restore it after the hook rewrites
+    # the file.
+    _git(repo, "reset", "-q")
+    _git(repo, "checkout", "--", "docs/.nav.yml")
+    assert other_page not in _git(repo, "diff", "--cached", "--name-only").stdout.split()
+    assert (repo / other_page).exists()
+
+    readme.write_text("# Text to image, reworded", encoding="utf-8")
+    _git(repo, "add", f"{EXAMPLE_DIR}/README.md")
+
+    done = _pre_commit(repo, tmp_path)
+
+    assert done.returncode == 0, done.stderr
+    staged_blob = _git(repo, "rev-parse", f":{other_page}", check=False)
+    assert staged_blob.returncode == 0, "the generated page is missing from the index"
+    assert staged_blob.stdout.strip() == _git(repo, "hash-object", other_page).stdout.strip()

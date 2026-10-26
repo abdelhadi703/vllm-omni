@@ -131,16 +131,20 @@ def export_index(root: Path, destination: Path) -> None:
 
 
 def apply_snapshot(root: Path, snapshot: Path) -> tuple[list[str], list[str]]:
-    """Copy the snapshot's pages back and report (changed, removed).
+    """Write the snapshot's pages back and report (to_stage, to_remove).
 
-    Those two lists are the only paths the caller may stage: they come from the
-    index snapshot, so nothing the working tree carries on its own can reach the
-    commit. A page the snapshot did not produce is removed only if git tracks
-    it; a local untracked page is left alone.
+    Every page the snapshot produced is returned for staging, even when the
+    bytes already match on disk: the page can exist untracked (someone ran a
+    docs build before staging the example) and comparing the working tree alone
+    would leave the source committed without it. Redundant writes are still
+    skipped, which is a separate concern from what reaches the index.
+
+    A page the snapshot did not produce is removed only if git tracks it; a
+    local untracked page is left alone.
     """
     produced_root = snapshot / GENERATED_PAGE_PREFIX
     target_root = root / GENERATED_PAGE_PREFIX
-    changed: list[str] = []
+    to_stage: list[str] = []
     produced: set[str] = set()
     if produced_root.is_dir():
         for page in sorted(produced_root.rglob("*.md")):
@@ -148,11 +152,10 @@ def apply_snapshot(root: Path, snapshot: Path) -> tuple[list[str], list[str]]:
             produced.add(relative)
             destination = target_root / relative
             text = page.read_text(encoding="utf-8")
-            if destination.exists() and destination.read_text(encoding="utf-8") == text:
-                continue
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_text(text, encoding="utf-8")
-            changed.append(f"{GENERATED_PAGE_PREFIX}{relative}")
+            if not destination.exists() or destination.read_text(encoding="utf-8") != text:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text(text, encoding="utf-8")
+            to_stage.append(f"{GENERATED_PAGE_PREFIX}{relative}")
 
     nav_source = snapshot / NAV_FILE
     if nav_source.exists():
@@ -160,17 +163,17 @@ def apply_snapshot(root: Path, snapshot: Path) -> tuple[list[str], list[str]]:
         nav_target = root / NAV_FILE
         if not nav_target.exists() or nav_target.read_text(encoding="utf-8") != nav_text:
             nav_target.write_text(nav_text, encoding="utf-8")
-            changed.append(NAV_FILE)
+        to_stage.append(NAV_FILE)
 
     tracked = {path for path in git("ls-files", "-z", "--", GENERATED_PAGE_PREFIX, cwd=root).split("\0") if path}
-    removed: list[str] = []
+    to_remove: list[str] = []
     if target_root.is_dir():
         for page in sorted(target_root.rglob("*.md")):
             relative = page.relative_to(target_root).as_posix()
             path = f"{GENERATED_PAGE_PREFIX}{relative}"
             if relative not in produced and path in tracked:
-                removed.append(path)
-    return changed, removed
+                to_remove.append(path)
+    return to_stage, to_remove
 
 
 @contextmanager
@@ -251,7 +254,7 @@ def main() -> int:
         return 0
 
     try:
-        changed, removed = regenerate(root)
+        to_stage, to_remove = regenerate(root)
     except Exception as exc:  # noqa: BLE001 - surface any generator failure to the user
         print(
             f"error: generating the example pages failed: {exc}",
@@ -259,18 +262,18 @@ def main() -> int:
         )
         return 1
 
-    if not changed and not removed:
+    if not to_stage and not to_remove:
         return 0
 
-    if changed:
-        subprocess.run(["git", "add", "--", *changed], cwd=root, check=True)
-    if removed:
-        subprocess.run(["git", "rm", "-f", "--", *removed], cwd=root, check=True)
+    if to_stage:
+        subprocess.run(["git", "add", "--", *to_stage], cwd=root, check=True)
+    if to_remove:
+        subprocess.run(["git", "rm", "-f", "--", *to_remove], cwd=root, check=True)
 
     print("Synced the example pages with examples/:")
-    for path in changed:
-        print(f"  updated: {path}")
-    for path in removed:
+    for path in to_stage:
+        print(f"  staged:  {path}")
+    for path in to_remove:
         print(f"  removed: {path}")
     return 0
 
